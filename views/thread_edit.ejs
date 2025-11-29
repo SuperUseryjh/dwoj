@@ -1,0 +1,36 @@
+<%- include('partials/header') %>
+
+<div class="row justify-content-center">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header">发布新讨论</div>
+            <div class="card-body">
+                <form action="/discuss/create" method="POST">
+                    <div class="mb-3">
+                        <label class="form-label">选择节点</label>
+                        <select name="nodeId" class="form-select">
+                            <% nodes.forEach(n => { %>
+                                <option value="<%= n.id %>"><%= n.name %></option>
+                            <% }) %>
+                        </select>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label">标题</label>
+                        <input type="text" name="title" class="form-control" required>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">内容</label>
+                        <textarea name="content" class="form-control" rows="8" required></textarea>
+                        <div class="form-text">支持 Markdown 语法与 LaTeX 公式 (如 $E=mc^2$)</div>
+                    </div>
+
+                    <button type="submit" class="btn btn-primary">发布</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<%- include('partials/footer') %>

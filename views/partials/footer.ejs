@@ -1,0 +1,25 @@
+    </div>
+    <footer class="text-center mt-5 py-3 text-muted">
+        DwOJ Made By Dw2023
+    </footer>
+
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+    <%- typeof pluginFooter !== 'undefined' ? pluginFooter : '' %>
+
+    <script>
+        // 页面加载完成后，自动寻找页面中的 $$...$$ 和 $...$ 进行渲染
+        document.addEventListener("DOMContentLoaded", function() {
+            renderMathInElement(document.body, {
+                delimiters: [
+                    {left: '$$', right: '$$', display: true},  // 块级公式
+                    {left: '$', right: '$', display: false},   // 行内公式
+                    {left: '\\(', right: '\\)', display: false},
+                    {left: '\\[', right: '\\]', display: true}
+                ],
+                throwOnError : false
+            });
+        });
+    </script>
+</body>
+</html>

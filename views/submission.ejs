@@ -1,0 +1,29 @@
+<%- include('partials/header') %>
+<h3>评测 #<%= sub.id %> 详情</h3>
+<div class="alert alert-secondary">
+    题目: <%= sub.problemId %> | 用户: <%= sub.username %> | 状态: <strong><%= sub.status %></strong>
+</div>
+
+<h4>代码</h4>
+<pre class="bg-dark text-white p-3 rounded"><code><%= sub.code %></code></pre>
+
+<% if(sub.errorInfo) { %>
+    <div class="alert alert-danger">
+        <strong>Erro Info:</strong>
+        <pre><%= sub.errorInfo %></pre>
+    </div>
+<% } %>
+
+<% if(sub.caseResults && sub.caseResults.length > 0) { %>
+    <h4>测试点详情</h4>
+    <div class="row">
+        <% sub.caseResults.forEach(c => { %>
+            <div class="col-2 mb-2">
+                <div class="p-2 text-center text-white <%= c.status==='AC'?'bg-success':'bg-danger' %> rounded">
+                    <%= c.name %>: <%= c.status %>
+                </div>
+            </div>
+        <% }) %>
+    </div>
+<% } %>
+<%- include('partials/footer') %>

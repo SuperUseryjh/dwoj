@@ -1,0 +1,25 @@
+<%- include('partials/header') %>
+<div class="card">
+    <div class="card-header"><%= problem ? '编辑题目' : '新建题目' %></div>
+    <div class="card-body">
+        <form action="/problem/save" method="POST" enctype="multipart/form-data">
+            <input type="hidden" name="id" value="<%= problem ? problem.id : '' %>">
+            <div class="mb-3">
+                <label>标题</label>
+                <input type="text" name="title" class="form-control" value="<%= problem ? problem.title : '' %>" required>
+            </div>
+            <div class="mb-3">
+                <label>描述 (支持文本)</label>
+                <textarea name="description" class="form-control" rows="5"><%= problem ? problem.description : '' %></textarea>
+                <div class="form-text">支持 Markdown 语法与 LaTeX 公式 (如 $E=mc^2$)</div>
+            </div>
+            <div class="mb-3">
+                <label>测试数据 (ZIP格式)</label>
+                <input type="file" name="testcaseZip" class="form-control" accept=".zip" <%= problem ? '' : 'required' %>>
+                <div class="form-text">请上传zip文件，内部包含如 1.in, 1.out, 2.in, 2.out 等文件。</div>
+            </div>
+            <button class="btn btn-primary">保存</button>
+        </form>
+    </div>
+</div>
+<%- include('partials/footer') %>

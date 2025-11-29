@@ -1,0 +1,59 @@
+<%- include('partials/header') %>
+
+<div class="row mb-3 align-items-center">
+    <div class="col">
+        <h2 class="mb-0">题目列表</h2>
+    </div>
+    <div class="col-auto">
+        <!-- 只有 super_user (1) 也就是管理员及以上权限可以看到新建按钮 -->
+        <% if (user && ROLE_LV[user.role] >= 1) { %>
+            <a href="/problem/new" class="btn btn-success">
+                <i class="bi bi-plus-lg"></i> + 新建题目
+            </a>
+        <% } %>
+    </div>
+</div>
+
+<div class="card shadow-sm">
+    <div class="card-body p-0">
+        <table class="table table-hover table-striped mb-0 align-middle">
+            <thead class="table-light">
+                <tr>
+                    <th scope="col" style="width: 80px;">#</th>
+                    <th scope="col">标题</th>
+                    <th scope="col">时间限制</th>
+                    <th scope="col" style="width: 150px;">操作</th>
+                </tr>
+            </thead>
+            <tbody>
+                <% if (problems.length === 0) { %>
+                    <tr>
+                        <td colspan="4" class="text-center py-4 text-muted">暂无题目，请管理员添加</td>
+                    </tr>
+                <% } %>
+
+                <% problems.forEach(function(p) { %>
+                    <tr>
+                        <td class="fw-bold"><%= p.id %></td>
+                        <td>
+                            <a href="/problem/<%= p.id %>" class="text-decoration-none fw-bold text-dark">
+                                <%= p.title %>
+                            </a>
+                        </td>
+                        <td><span class="badge bg-secondary"><%= p.timeLimit || '1000' %> ms</span></td>
+                        <td>
+                            <a href="/problem/<%= p.id %>" class="btn btn-sm btn-primary">做题</a>
+                            
+                            <!-- 编辑权限判断：root用户 或 题目的作者 -->
+                            <% if (user && (user.role === 'root' || (ROLE_LV[user.role] >= 1 && user.id === p.authorId))) { %>
+                                <a href="/problem/edit/<%= p.id %>" class="btn btn-sm btn-outline-secondary">编辑</a>
+                            <% } %>
+                        </td>
+                    </tr>
+                <% }); %>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<%- include('partials/footer') %>

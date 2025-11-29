@@ -1,0 +1,76 @@
+<%- include('partials/header') %>
+
+<h2 class="mb-4">评测状态</h2>
+
+<div class="card shadow-sm">
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>ID</th>
+                        <th>题目</th>
+                        <th>用户</th>
+                        <th>语言</th>
+                        <th>状态</th>
+                        <th>提交时间</th>
+                        <th>详情</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <% if (submissions.length === 0) { %>
+                        <tr><td colspan="7" class="text-center py-3">暂无提交记录</td></tr>
+                    <% } %>
+
+                    <% submissions.forEach(function(s) { %>
+                        <tr>
+                            <td><%= s.id %></td>
+                            <td>
+                                <a href="/problem/<%= s.problemId %>" class="text-decoration-none">
+                                    P<%= s.problemId %>
+                                </a>
+                            </td>
+                            <td>
+                                <a href="#" class="text-decoration-none"><%= s.username %></a>
+                            </td>
+                            <td>
+                                <span class="badge bg-light text-dark border"><%= s.language %></span>
+                            </td>
+                            <td>
+                                <% if (s.status === 'Accepted') { %>
+                                    <span class="badge bg-success rounded-pill">Available</span> <!-- 这里用Bootstrap内置样式模拟AC绿 -->
+                                    <span class="fw-bold text-success">Accepted</span>
+                                <% } else if (s.status === 'Pending' || s.status === 'Running') { %>
+                                    <div class="spinner-border spinner-border-sm text-primary" role="status"></div>
+                                    <span class="text-primary"><%= s.status %></span>
+                                <% } else if (s.status.includes('Wrong')) { %>
+                                    <span class="fw-bold text-danger">Wrong Answer</span>
+                                <% } else { %>
+                                    <span class="fw-bold text-warning text-dark"><%= s.status %></span>
+                                <% } %>
+                            </td>
+                            <td class="text-muted small"><%= s.time %></td>
+                            <td>
+                                <!-- 如果登录了，且（是本人 或 是管理员）才能看详情，这里简单给个按钮，具体权限后端app.js已经做了拦截 -->
+                                <% if (user) { %>
+                                    <a href="/submission/<%= s.id %>" class="btn btn-sm btn-outline-primary">查看代码</a>
+                                <% } else { %>
+                                    <span class="text-muted small">需登录</span>
+                                <% } %>
+                            </td>
+                        </tr>
+                    <% }); %>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- 自动刷新脚本，体验更好 -->
+<script>
+    setTimeout(() => {
+        window.location.reload();
+    }, 5000); // 每5秒刷新一次
+</script>
+
+<%- include('partials/footer') %>

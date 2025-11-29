@@ -1,0 +1,71 @@
+<%- include('partials/header') %>
+
+<div class="row">
+    <!-- 左侧：题目描述区 -->
+    <div class="col-lg-8">
+        <div class="card shadow-sm mb-4">
+            <div class="card-body">
+                <h2 class="card-title mb-3"><%= problem.id %>. <%= problem.title %></h2>
+                
+                <div class="mb-3">
+                    <span class="badge bg-info text-dark">时间限制: <%= problem.timeLimit || '1000' %> ms</span>
+                    <span class="badge bg-secondary">内存限制: 128 MB</span>
+                </div>
+
+                <hr>
+                
+                <div class="problem-content mt-4">
+                    <h5>题目描述</h5>
+                    <div class="p-3 bg-light border rounded markdown-body">
+                        <%- renderMarkdown(problem.description) %>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 右侧：提交代码区 -->
+    <div class="col-lg-4">
+        <div class="card shadow-sm sticky-top" style="top: 20px;">
+            <div class="card-header bg-white fw-bold">
+                提交代码
+            </div>
+            <div class="card-body">
+                <% if (user) { %>
+                    <!-- 只有登录用户显示表单 -->
+                    <form action="/submit" method="POST">
+                        <input type="hidden" name="problemId" value="<%= problem.id %>">
+                        
+                        <div class="mb-3">
+                            <label class="form-label">语言</label>
+                            <select name="language" class="form-select">
+                                <option value="python">Python 3</option>
+                                <option value="node">Node.js</option>
+                            </select>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">源代码</label>
+                            <textarea name="code" class="form-control font-monospace bg-dark text-white" rows="10" required placeholder="在此粘贴代码..."></textarea>
+                        </div>
+
+                        <div class="d-grid">
+                            <button type="submit" class="btn btn-primary">提交评测</button>
+                        </div>
+                    </form>
+                <% } else { %>
+                    <!-- 未登录状态 -->
+                    <div class="text-center py-4">
+                        <p class="text-muted">请登录后提交代码</p>
+                        <a href="/login" class="btn btn-primary w-100">登录</a>
+                        <div class="mt-2">
+                            <a href="/register" class="small text-decoration-none">注册账号</a>
+                        </div>
+                    </div>
+                <% } %>
+            </div>
+        </div>
+    </div>
+</div>
+
+<%- include('partials/footer') %>

@@ -1,0 +1,19 @@
+{
+  "name": "dwoj",
+  "version": "1.0.0",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js"
+  },
+  "dependencies": {
+    "adm-zip": "^0.5.16",
+    "body-parser": "^1.20.3",
+    "cookie-parser": "^1.4.7",
+    "ejs": "^3.1.10",
+    "express": "^4.21.2",
+    "fs-extra": "^11.3.2",
+    "markdown-it": "^14.1.0",
+    "multer": "^2.0.2",
+    "sqlite3": "^5.1.7"
+  }
+}

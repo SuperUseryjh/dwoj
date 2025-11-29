@@ -1,0 +1,57 @@
+<%- include('partials/header') %>
+
+<nav aria-label="breadcrumb">
+  <ol class="breadcrumb">
+    <li class="breadcrumb-item"><a href="/discuss">讨论区</a></li>
+    <li class="breadcrumb-item active" aria-current="page">帖子 #<%= thread.id %></li>
+  </ol>
+</nav>
+
+<div class="card mb-4">
+    <div class="card-header bg-white">
+        <h3 class="mb-0"><%= thread.title %></h3>
+        <small class="text-muted">
+            楼主：<%= thread.author %> | 时间：<%= thread.time %>
+        </small>
+    </div>
+    <div class="card-body">
+        <%- renderMarkdown(thread.content) %>
+    </div>
+</div>
+
+<h5>回复 (<%= thread.replies.length %>)</h5>
+
+<% thread.replies.forEach((r, idx) => { %>
+    <div class="card mb-2">
+        <div class="card-body py-2">
+            <div class="d-flex justify-content-between">
+                <strong><%= r.author %></strong>
+                <small class="text-muted"><%= r.time %> #<%= idx+1 %></small>
+            </div>
+            <div class="mt-1 text-dark">
+                <%- renderMarkdown(r.content) %>
+            </div>
+        </div>
+    </div>
+<% }) %>
+
+<div class="card mt-4">
+    <div class="card-header">发表回复</div>
+    <div class="card-body">
+        <% if(user) { %>
+            <form action="/discuss/reply" method="POST">
+                <input type="hidden" name="threadId" value="<%= thread.id %>">
+                <div class="mb-3">
+                    <textarea name="content" class="form-control" rows="3" required></textarea>
+                </div>
+                <button class="btn btn-primary">发送回复</button>
+            </form>
+        <% } else { %>
+            <div class="text-center">
+                <a href="/login">登录</a> 后参与讨论
+            </div>
+        <% } %>
+    </div>
+</div>
+
+<%- include('partials/footer') %>

@@ -1,0 +1,49 @@
+<%- include('partials/header') %>
+<h2>系统管理</h2>
+<div class="row">
+    <div class="col-md-8">
+        <h4>用户管理</h4>
+        <table class="table table-sm table-bordered">
+            <thead><tr><th>ID</th><th>用户</th><th>组</th><th>Tag</th><th>封号</th><th>操作</th></tr></thead>
+            <tbody>
+                <% users.forEach(u => { %>
+                <tr>
+                    <td><%= u.id %></td>
+                    <td><%= u.username %> <% if(u.isBanned){ %><span class="badge bg-danger">BANNED</span><% } %></td>
+                    <td><%= u.role %></td>
+                    <td>
+                        <% if(u.tags) u.tags.forEach(t=>{ %> <span class="badge bg-info"><%= t %></span> <% }) %>
+                        <form action="/admin/tag" method="POST" class="d-inline">
+                            <input type="hidden" name="uid" value="<%= u.id %>">
+                            <input type="text" name="tag" size="5" placeholder="add tag">
+                        </form>
+                    </td>
+                    <td>
+                        <% if(!u.isBanned){ %>
+                        <form action="/admin/ban" method="POST"><input type="hidden" name="uid" value="<%= u.id %>"><button class="btn btn-xs btn-danger">Ban</button></form>
+                        <% } else { %>
+                        <form action="/admin/unban" method="POST"><input type="hidden" name="uid" value="<%= u.id %>"><button class="btn btn-xs btn-success">Unban</button></form>
+                        <% } %>
+                    </td>
+                    <td>...</td>
+                </tr>
+                <% }) %>
+            </tbody>
+        </table>
+    </div>
+    <div class="col-md-4">
+        <div class="card mt-3">
+            <div class="card-header bg-warning">高级设置</div>
+            <div class="card-body">
+                <a href="/admin/plugins" class="btn btn-outline-dark w-100">🔌 插件管理</a>
+            </div>
+        </div>
+        <h4>节点管理</h4>
+        <form action="/discuss/node" method="POST">
+            <input type="text" name="name" placeholder="节点名" class="form-control mb-2">
+            <input type="text" name="desc" placeholder="描述" class="form-control mb-2">
+            <button class="btn btn-success w-100">添加节点</button>
+        </form>
+    </div>
+</div>
+<%- include('partials/footer') %>

@@ -1,0 +1,60 @@
+<%- include('partials/header') %>
+
+<div class="row mb-3">
+    <div class="col">
+        <h2>讨论区</h2>
+    </div>
+    <div class="col-auto">
+        <a href="/discuss/new" class="btn btn-primary">发布新帖</a>
+    </div>
+</div>
+
+<div class="row">
+    <!-- 左侧：节点分类 -->
+    <div class="col-md-3">
+        <div class="list-group mb-4">
+            <a href="/discuss" class="list-group-item list-group-item-action active">所有节点</a>
+            <% nodes.forEach(n => { %>
+                <div class="list-group-item d-flex justify-content-between align-items-center">
+                    <%= n.name %>
+                    <span class="badge bg-secondary rounded-pill"><%= n.id %></span>
+                </div>
+            <% }) %>
+        </div>
+        
+        <% if (user && ROLE_LV[user.role] >= 1) { %>
+            <div class="card">
+                <div class="card-header text-white bg-danger">管理员：添加节点</div>
+                <div class="card-body">
+                    <form action="/discuss/node" method="POST">
+                        <input type="text" name="name" class="form-control mb-2" placeholder="节点名称" required>
+                        <textarea name="desc" class="form-control mb-2" placeholder="描述"></textarea>
+                        <button class="btn btn-sm btn-danger w-100">添加</button>
+                    </form>
+                </div>
+            </div>
+        <% } %>
+    </div>
+
+    <!-- 右侧：帖子列表 -->
+    <div class="col-md-9">
+        <% if(threads.length === 0) { %>
+            <div class="alert alert-info">暂无讨论，快来发布第一条帖子吧！</div>
+        <% } %>
+
+        <div class="list-group">
+            <% threads.forEach(t => { %>
+                <a href="/discuss/thread/<%= t.id %>" class="list-group-item list-group-item-action">
+                    <div class="d-flex w-100 justify-content-between">
+                        <h5 class="mb-1"><%= t.title %></h5>
+                        <small class="text-muted"><%= t.time %></small>
+                    </div>
+                    <p class="mb-1 text-truncate" style="max-width: 600px;"><%= t.content %></p>
+                    <small class="text-primary">User: <%= t.author %></small> 
+                    <small class="text-muted ms-2"><%= t.replies ? t.replies.length : 0 %> 回复</small>
+                </a>
+            <% }) %>
+        </div>
+    </div>
+</div>
+<%- include('partials/footer') %>

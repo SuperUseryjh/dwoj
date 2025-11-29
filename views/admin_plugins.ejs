@@ -1,0 +1,67 @@
+<%- include('partials/header') %>
+<div class="container">
+    <h2 class="mb-4">插件管理系统</h2>
+    
+    <div class="card mb-4">
+        <div class="card-header">上传插件 (.js)</div>
+        <div class="card-body">
+            <form action="/admin/plugins/upload" method="POST" enctype="multipart/form-data">
+                <div class="input-group">
+                    <input type="file" name="pluginFile" class="form-control" accept=".js" required>
+                    <button class="btn btn-primary">上传安装</button>
+                </div>
+                <div class="form-text text-danger">警告：请仅上传受信任的插件，恶意代码可完全控制服务器。</div>
+            </form>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header">已安装插件</div>
+        <table class="table table-hover align-middle mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th>文件名</th>
+                    <th>名称 / 版本</th>
+                    <th>描述</th>
+                    <th>状态</th>
+                    <th>操作</th>
+                </tr>
+            </thead>
+            <tbody>
+                <% plugins.forEach(p => { %>
+                    <tr>
+                        <td><code><%= p.filename %></code></td>
+                        <td><strong><%= p.name %></strong> <span class="badge bg-secondary"><%= p.version %></span></td>
+                        <td><%= p.desc %></td>
+                        <td>
+                            <% if(p.enabled) { %>
+                                <span class="badge bg-success">运行中</span>
+                            <% } else { %>
+                                <span class="badge bg-secondary">已禁用</span>
+                            <% } %>
+                        </td>
+                        <td>
+                           <div class="d-flex gap-2">
+                               <form action="/admin/plugins/toggle" method="POST">
+                                   <input type="hidden" name="filename" value="<%= p.filename %>">
+                                   <% if(p.enabled) { %>
+                                       <input type="hidden" name="enabled" value="false">
+                                       <button class="btn btn-sm btn-warning">禁用</button>
+                                   <% } else { %>
+                                       <input type="hidden" name="enabled" value="true">
+                                       <button class="btn btn-sm btn-success">启用</button>
+                                   <% } %>
+                               </form>
+                               <form action="/admin/plugins/delete" method="POST" onsubmit="return confirm('确认删除？');">
+                                   <input type="hidden" name="filename" value="<%= p.filename %>">
+                                   <button class="btn btn-sm btn-danger">删除</button>
+                               </form>
+                           </div>
+                        </td>
+                    </tr>
+                <% }) %>
+            </tbody>
+        </table>
+    </div>
+</div>
+<%- include('partials/footer') %>
