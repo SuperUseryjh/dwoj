@@ -29,7 +29,8 @@ app.use(bodyParser.urlencoded({ extended: true }));
 app.use(cookieParser());
 
 // 初始化插件系统
-const pluginManager = new PluginSystem(config.PLUGINS_DIR, db, app); // 传入 db
+const oj = { app, db, config, logger }; // Create the oj object
+const pluginManager = new PluginSystem(config.PLUGINS_DIR, oj); // Pass the oj object
 pluginManager.loadAll();
 app.set('pluginManager', pluginManager); // 将 pluginManager 存储在 app 对象中，以便在其他地方访问
 
