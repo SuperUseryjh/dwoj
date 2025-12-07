@@ -1,5 +1,7 @@
 const express = require('express');
 const router = express.Router();
+const jwt = require('jsonwebtoken'); // 引入 jsonwebtoken
+const config = require('../config'); // 引入 config
 const { db } = require('../lib/database');
 const logger = require('../lib/logger');
 
@@ -9,14 +11,21 @@ router.get('/login', (req, res) => res.render('login'));
 // 处理登录
 router.post('/login', (req, res) => {
     const { username, password } = req.body;
-    db.get("SELECT id, username, password, isBanned FROM users WHERE username = ? AND password = ?", [username, password], (err, user) => {
+    db.get("SELECT id, username, password, role, isBanned FROM users WHERE username = ? AND password = ?", [username, password], (err, user) => {
         if (err) {
             logger.error('Error during login', err);
             return res.status(500).send('服务器错误');
         }
         if (user) {
             if (user.isBanned) return res.send('账号已被封禁');
-            res.cookie('uid', user.id);
+
+            // 生成 JWT
+            const token = jwt.sign({ id: user.id, role: user.role }, config.JWT_SECRET, { expiresIn: '1h' }); // JWT 有效期 1 小时
+
+            // 将 JWT 设置为 HttpOnly Cookie
+            res.cookie('token', token, { httpOnly: true, secure: process.env.NODE_ENV === 'production', maxAge: 3600000 }); // maxAge 1小时
+            res.cookie('uid', user.id); // 保持 uid cookie 以兼容前端
+
             res.redirect('/');
         } else {
             res.send('用户名或密码错误');
@@ -54,6 +63,10 @@ router.post('/register', (req, res) => {
 });
 
 // 注销
-router.get('/logout', (req, res) => { res.clearCookie('uid'); res.redirect('/'); });
+router.get('/logout', (req, res) => {
+    res.clearCookie('uid');
+    res.clearCookie('token'); // 清除 JWT token cookie
+    res.redirect('/');
+});
 
 module.exports = router;
