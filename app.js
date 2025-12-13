@@ -8,10 +8,12 @@ const config = require('./config');
 const { db, initDb } = require('./lib/database');
 const logger = require('./lib/logger');
 const PluginSystem = require('./lib/plugin_system');
+const Updater = require('./lib/updater'); // 引入 Updater
 const globalMiddleware = require('./middleware/global');
 const createRoutes = require('./routes');
 
 const app = express();
+const appRoot = path.resolve(__dirname); // 获取应用程序根目录
 
 // 初始化目录
 fs.ensureDirSync(config.DATA_DIR);
@@ -41,6 +43,15 @@ app.use(globalMiddleware(pluginManager));
 app.use(createRoutes(pluginManager));
 
 // 启动服务器
-app.listen(config.PORT, () => {
+app.listen(config.PORT, async () => { // 将 app.listen 回调函数改为 async
     logger.info(`DWOJ 2.0 running on port ${config.PORT}`);
+
+    // 检查并应用更新
+    const updater = new Updater(appRoot);
+    const updated = await updater.checkAndApplyUpdate();
+    if (updated) {
+        logger.info('Application updated. Please restart the server to load the new version.');
+        // 可以在这里选择退出进程，让外部进程管理器重启应用
+        // process.exit(0);
+    }
 });
