@@ -1,0 +1,1 @@
+{"version":3,"file":"global.d.ts","sourceRoot":"","sources":["../../middleware/global.ts"],"names":[],"mappings":"AAKA,OAAO,EAAE,OAAO,EAAE,QAAQ,EAAE,YAAY,EAAE,MAAM,SAAS,CAAC;AAC1D,OAAO,YAAY,MAAM,sBAAsB,CAAC;yBAShC,eAAe,YAAY,MAC/B,KAAK,OAAO,EAAE,KAAK,QAAQ,EAAE,MAAM,YAAY,KAAG,IAAI;AADlE,wBAwFE"}
