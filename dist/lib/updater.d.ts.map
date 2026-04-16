@@ -1,0 +1,1 @@
+{"version":3,"file":"updater.d.ts","sourceRoot":"","sources":["../../lib/updater.ts"],"names":[],"mappings":"AAOA,cAAM,OAAO;IACT,OAAO,CAAC,OAAO,CAAS;IACxB,OAAO,CAAC,cAAc,CAAS;IAC/B,OAAO,CAAC,gBAAgB,CAAS;IACjC,OAAO,CAAC,cAAc,CAAS;IAC/B,OAAO,CAAC,OAAO,CAAS;gBAEZ,OAAO,EAAE,MAAM;IAQd,mBAAmB,IAAI,OAAO,CAAC,OAAO,CAAC;YA6BtC,wBAAwB;CA+CzC;AAED,eAAe,OAAO,CAAC"}
