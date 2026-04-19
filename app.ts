@@ -4,7 +4,7 @@ import cookieParser from 'cookie-parser';
 import fs from 'fs-extra';
 import path from 'path';
 import config from './config';
-import { db, initDb } from './lib/database';
+import { db, initDb, connectDatabase } from './lib/database';
 import logger from './lib/logger';
 import PluginSystem from './lib/plugin_system';
 import Updater from './lib/updater';
@@ -18,8 +18,6 @@ fs.ensureDirSync(config.DATA_DIR);
 fs.ensureDirSync(config.PROB_DIR);
 fs.ensureDirSync(config.UPLOAD_DIR);
 fs.ensureDirSync(config.PLUGINS_DIR);
-
-initDb();
 
 app.set('view engine', 'ejs');
 app.use(express.static('public'));
@@ -35,14 +33,26 @@ app.use(globalMiddleware(pluginManager));
 
 app.use(createRoutes(pluginManager));
 
-app.listen(config.PORT as number, async () => {
-    logger.info(`DWOJ 2.0 running on port ${config.PORT}`);
+const startServer = async () => {
+    try {
+        await connectDatabase();
+        initDb();
+        
+        app.listen(config.PORT as number, async () => {
+            logger.info(`DWOJ 2.0 running on port ${config.PORT}`);
 
-    const updater = new Updater(appRoot);
-    const updated = await updater.checkAndApplyUpdate();
-    if (updated) {
-        logger.info('Application updated. Please restart the server to load the new version.');
+            const updater = new Updater(appRoot);
+            const updated = await updater.checkAndApplyUpdate();
+            if (updated) {
+                logger.info('Application updated. Please restart the server to load the new version.');
+            }
+        });
+    } catch (error) {
+        logger.error('Failed to start server', error);
+        process.exit(1);
     }
-});
+};
+
+startServer();
 
 export default app;
