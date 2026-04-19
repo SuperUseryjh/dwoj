@@ -41,20 +41,68 @@ dwoj/
     npm install
     ```
 
-2.  **启动服务器**
+2.  **构建项目**
     ```bash
-    node app.js
+    npm run build
     ```
+
+3.  **启动服务器**
+    
+    **方式一：直接启动 (开发环境)**
+    ```bash
+    npm run start
+    # 或
+    node dist/app.js
+    ```
+    
+    **方式二：使用 PM2 启动 (推荐，生产环境)**
+    ```bash
+    # 使用 npm 脚本
+    npm run pm2:start
+    
+    # 或使用部署脚本
+    # Windows:
+    deploy.bat
+    
+    # Linux/Mac:
+    chmod +x deploy.sh
+    ./deploy.sh
+    ```
+    
     如果看到输出 `DWOJ 2.0 running on port 3000`，说明启动成功。
 
-3.  **访问系统**
+4.  **访问系统**
     打开浏览器访问：`http://localhost:3000`
 
-4.  **初始化管理员账号**
+5.  **初始化管理员账号**
     系统首次启动会自动创建超级管理员账号：
     *   **用户名**: `root`
     *   **密码**: `root`
     *   *请登录后尽快修改密码。*
+
+### PM2 部署说明
+
+系统已集成 PM2 进程管理器，提供更稳定的生产环境部署方案。
+
+**常用 PM2 命令:**
+```bash
+# 查看状态
+pm2 status
+
+# 查看日志
+pm2 logs dwoj
+
+# 重启应用
+pm2 restart dwoj
+
+# 停止应用
+pm2 stop dwoj
+
+# 实时监控
+pm2 monit
+```
+
+**详细部署文档请查看:** [DEPLOYMENT.md](./DEPLOYMENT.md)
 
 ---
 
