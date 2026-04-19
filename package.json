@@ -8,7 +8,17 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/app.js",
-    "dev": "tsc && node dist/app.js"
+    "dev": "tsc && node dist/app.js",
+    "pm2:start": "pm2 start ecosystem.config.js",
+    "pm2:stop": "pm2 stop ecosystem.config.js",
+    "pm2:restart": "pm2 restart ecosystem.config.js",
+    "pm2:delete": "pm2 delete ecosystem.config.js",
+    "pm2:logs": "pm2 logs dwoj",
+    "pm2:monit": "pm2 monit",
+    "pm2:status": "pm2 status dwoj",
+    "deploy:build": "npm run build && npm run pm2:restart",
+    "deploy:prod": "npm run build && pm2 start ecosystem.config.js --env production",
+    "deploy:quick": "npm run build && pm2 start ecosystem.config.js && pm2 save"
   },
   "dependencies": {
     "adm-zip": "^0.5.16",
@@ -33,6 +43,7 @@
     "@types/multer": "^2.1.0",
     "@types/node": "^25.6.0",
     "@types/tar": "^6.1.13",
-    "typescript": "^6.0.2"
+    "typescript": "^6.0.2",
+    "pm2": "^5.4.0"
   }
 }
