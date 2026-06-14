@@ -83,9 +83,9 @@ jobs:
           cp ./dist/dwoj-server ./dwoj-release/
           cp ./dist/dwoj ./dwoj-release/
           cp -r ./views ./dwoj-release/
-          cp -r ./public ./dwoj-release/
+          [ -d ./public ] && cp -r ./public ./dwoj-release/
           cp ./package.json ./dwoj-release/
-          cp ./plugin.md ./dwoj-release/
+          [ -f ./plugin.md ] && cp ./plugin.md ./dwoj-release/
           cp ./README.md ./dwoj-release/
           cd ./dwoj-release && tar czf ../dwoj-${{ matrix.target }}.tar.gz .
 
@@ -97,9 +97,9 @@ jobs:
           Copy-Item .\dist\dwoj-server.exe .\dwoj-release\
           Copy-Item .\dist\dwoj.exe .\dwoj-release\
           Copy-Item -Recurse .\views .\dwoj-release\
-          Copy-Item -Recurse .\public .\dwoj-release\
+          if (Test-Path .\public) { Copy-Item -Recurse .\public .\dwoj-release\ }
           Copy-Item .\package.json .\dwoj-release\
-          Copy-Item .\plugin.md .\dwoj-release\
+          if (Test-Path .\plugin.md) { Copy-Item .\plugin.md .\dwoj-release\ }
           Copy-Item .\README.md .\dwoj-release\
           Compress-Archive -Path .\dwoj-release\* -DestinationPath .\dwoj-${{ matrix.target }}.zip
 
