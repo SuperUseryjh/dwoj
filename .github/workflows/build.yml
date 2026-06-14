@@ -70,11 +70,11 @@ jobs:
 
       - name: Build server binary
         run: |
-          bun build --compile --target=${{ matrix.target }} ./app.ts -o ./dist/dwoj-server${{ matrix.suffix }}
+          bun build --compile --target=${{ matrix.target }} --outfile=./dist/dwoj-server${{ matrix.suffix }} ./app.ts
 
       - name: Build CLI binary
         run: |
-          bun build --compile --target=${{ matrix.target }} ./dwoj-cli.ts -o ./dist/dwoj${{ matrix.suffix }}
+          bun build --compile --target=${{ matrix.target }} --outfile=./dist/dwoj${{ matrix.suffix }} ./dwoj-cli.ts
 
       - name: Package assets (Unix)
         if: runner.os != 'Windows'
