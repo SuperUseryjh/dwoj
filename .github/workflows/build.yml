@@ -1,0 +1,149 @@
+name: Build
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: TypeScript check
+        run: bun run tsc --noEmit
+
+      - name: Run tests
+        run: bun test
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: test
+    if: github.event_name != 'pull_request'
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: bun-linux-x64
+            runner: ubuntu-latest
+            suffix: ''
+          - target: bun-linux-arm64
+            runner: ubuntu-latest
+            suffix: ''
+          - target: bun-darwin-x64
+            runner: macos-latest
+            suffix: ''
+          - target: bun-darwin-arm64
+            runner: macos-latest
+            suffix: ''
+          - target: bun-windows-x64
+            runner: windows-latest
+            suffix: .exe
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build server binary
+        run: |
+          bun build --compile --target=${{ matrix.target }} ./app.ts -o ./dist/dwoj-server${{ matrix.suffix }}
+
+      - name: Build CLI binary
+        run: |
+          bun build --compile --target=${{ matrix.target }} ./dwoj-cli.ts -o ./dist/dwoj${{ matrix.suffix }}
+
+      - name: Package assets (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p ./dwoj-release
+          cp ./dist/dwoj-server ./dwoj-release/
+          cp ./dist/dwoj ./dwoj-release/
+          cp -r ./views ./dwoj-release/
+          cp -r ./public ./dwoj-release/
+          cp ./package.json ./dwoj-release/
+          cp ./plugin.md ./dwoj-release/
+          cp ./README.md ./dwoj-release/
+          cd ./dwoj-release && tar czf ../dwoj-${{ matrix.target }}.tar.gz .
+
+      - name: Package assets (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path .\dwoj-release -Force
+          Copy-Item .\dist\dwoj-server.exe .\dwoj-release\
+          Copy-Item .\dist\dwoj.exe .\dwoj-release\
+          Copy-Item -Recurse .\views .\dwoj-release\
+          Copy-Item -Recurse .\public .\dwoj-release\
+          Copy-Item .\package.json .\dwoj-release\
+          Copy-Item .\plugin.md .\dwoj-release\
+          Copy-Item .\README.md .\dwoj-release\
+          Compress-Archive -Path .\dwoj-release\* -DestinationPath .\dwoj-${{ matrix.target }}.zip
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dwoj-${{ matrix.target }}
+          path: |
+            dwoj-${{ matrix.target }}.tar.gz
+            dwoj-${{ matrix.target }}.zip
+          if-no-files-found: error
+
+  release:
+    name: Create Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: dwoj-*
+          path: ./artifacts
+          merge-multiple: true
+
+      - name: Generate release notes
+        id: notes
+        run: |
+          echo "Release ${{ github.ref_name }}" > ./release-notes.md
+          echo "---" >> ./release-notes.md
+          echo "" >> ./release-notes.md
+          for file in ./artifacts/*; do
+            name=$(basename "$file")
+            size=$(du -h "$file" | cut -f1)
+            echo "- $name ($size)" >> ./release-notes.md
+          done
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          body_path: ./release-notes.md
+          files: ./artifacts/*
+          draft: false
+          prerelease: false
