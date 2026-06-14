@@ -1,20 +1,26 @@
-const fs = require('fs-extra');
-const path = require('path');
-const axios = require('axios'); // 用于 HTTP 请求
-const tar = require('tar'); // 用于解压 .tar.gz 文件
-const config = require('../config');
-const logger = require('./logger');
+import fs from 'fs-extra';
+import path from 'path';
+import axios from 'axios';
+import * as tar from 'tar';
+import * as config from '../config';
+import logger from './logger';
 
 class Updater {
-    constructor(appRoot) {
+    appRoot: string;
+    updateCheckUrl: string;
+    updatePackageUrl: string;
+    currentVersion: string;
+    tempDir: string;
+
+    constructor(appRoot: string) {
         this.appRoot = appRoot;
         this.updateCheckUrl = config.UPDATE_CHECK_URL;
         this.updatePackageUrl = config.UPDATE_PACKAGE_URL;
-        this.currentVersion = config.CURRENT_VERSION; // 应该从 package.json 读取
-        this.tempDir = path.join(appRoot, 'temp_update'); // 临时目录
+        this.currentVersion = config.CURRENT_VERSION;
+        this.tempDir = path.join(appRoot, 'temp_update');
     }
 
-    async checkAndApplyUpdate() {
+    async checkAndApplyUpdate(): Promise<boolean> {
         logger.info('[Updater] Checking for updates...');
         try {
             const response = await axios.get(this.updateCheckUrl);
@@ -38,12 +44,12 @@ class Updater {
                 return false;
             }
         } catch (error) {
-            logger.error('[Updater] Error checking for updates:', error);
+            logger.error('[Updater] Error checking for updates:', error as Error);
             return false;
         }
     }
 
-    async downloadAndExtractUpdate(version) {
+    async downloadAndExtractUpdate(version: string): Promise<void> {
         logger.info(`[Updater] Downloading update package from ${this.updatePackageUrl}`);
         const tempPackagePath = path.join(this.tempDir, `dwoj-${version}.tar.gz`);
 
@@ -58,7 +64,7 @@ class Updater {
 
         response.data.pipe(writer);
 
-        await new Promise((resolve, reject) => {
+        await new Promise<void>((resolve, reject) => {
             writer.on('finish', resolve);
             writer.on('error', reject);
         });
@@ -74,29 +80,19 @@ class Updater {
         });
         logger.info('[Updater] Update package extracted.');
 
-        // 应用更新：将解压后的文件移动到应用程序根目录
-        // 注意：这会覆盖现有文件，请确保备份或在安全的环境中执行
         logger.info('[Updater] Applying update...');
-        // 假设 tar.gz 解压后，内容直接在 extractDir 下，或者在一个子目录中
-        // 这里需要根据实际的 tar.gz 结构进行调整
-        // 假设解压后，所有文件都在 extractDir/dwoj-new-version/ 这样的子目录中
-        // 或者直接在 extractDir 中
-        let extractedContentPath = extractDir; // 假设内容直接在 extractDir
-        // 如果解压后有一个顶层目录，例如 dwoj-2.1.0，则需要调整
+        let extractedContentPath = extractDir;
         const filesInExtractDir = await fs.readdir(extractDir);
         if (filesInExtractDir.length === 1 && await fs.stat(path.join(extractDir, filesInExtractDir[0])).then(s => s.isDirectory())) {
-            // 如果解压后只有一个目录，那么实际内容在这个子目录里
             extractedContentPath = path.join(extractDir, filesInExtractDir[0]);
         }
 
-        // 复制所有文件，覆盖现有文件
         await fs.copy(extractedContentPath, this.appRoot, { overwrite: true });
         logger.info('[Updater] Update applied successfully. Cleaning up temporary files...');
 
-        // 清理临时文件
         await fs.remove(this.tempDir);
         logger.info('[Updater] Temporary files cleaned up.');
     }
 }
 
-module.exports = Updater;
+export default Updater;
