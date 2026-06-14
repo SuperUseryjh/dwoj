@@ -1,57 +1,51 @@
-import express from 'express';
-import multer from 'multer';
+import { Router, UploadHandler } from '../lib/bun-http';
 import AdmZip from 'adm-zip';
 import fs from 'fs-extra';
 import path from 'path';
-import config from '../config';
+import * as config from '../config';
 import { requireLogin, requireRole, ROLE_LV } from '../middleware/auth';
-import db from '../lib/database';
-import { runJudge } from '../controllers/judge';
+import { Problem, Submission, User, query, queryOne, execute } from '../lib/database';
 import logger from '../lib/logger';
 
-const router = express.Router();
-const upload = multer({ dest: config.UPLOAD_DIR });
+const router = new Router();
+const upload = new UploadHandler({ dest: config.UPLOAD_DIR });
 
-router.get('/problem/new', requireRole('super_user'), (req, res) => res.render('problem_edit', { problem: null }));
+router.get('/problem/new', requireRole('super_user'), (req, res, next) => {
+    res.render('problem_edit', { problem: null });
+});
 
-router.post('/problem/save', requireRole('super_user'), upload.single('testcaseZip'), (req, res) => {
+router.post('/problem/save', requireRole('super_user'), upload.single('testcaseZip'), (req, res, next) => {
     const { id, title, description, timeLimit } = req.body;
 
-    if (id) {
-        db.get("SELECT * FROM problems WHERE id = ?", [id], (err: Error, problem: any) => {
-            if (err) {
-                logger.error('Error fetching problem for edit', err);
-                return res.status(500).send('服务器错误');
-            }
-            if (!problem) return res.status(404).send('题目不存在');
-
-            if (req.user!.role !== 'root' && problem.authorId !== req.user!.id) {
-                return res.status(403).send("无权修改此题目");
+    try {
+        if (id) {
+            const problem = queryOne<Problem>("SELECT * FROM problems WHERE id = ?", [id]);
+            if (!problem) {
+                res.status(404).send('题目不存在');
+                return;
             }
 
-            db.run("UPDATE problems SET title = ?, description = ?, timeLimit = ? WHERE id = ?",
-                [title, description, timeLimit, id], (err: Error) => {
-                    if (err) {
-                        logger.error('Error updating problem', err);
-                        return res.status(500).send('服务器错误');
-                    }
-                    handleZipUpload(req, id, res);
-                });
-        });
-    } else {
-        db.run(`INSERT INTO problems (title, description, authorId, timeLimit) VALUES (?, ?, ?, ?)`,
-            [title, description, req.user!.id, timeLimit], function(err: Error) {
-                if (err) {
-                    logger.error('Error inserting new problem', err);
-                    return res.status(500).send('服务器错误');
-                }
-                const newProblemId = this.lastID;
-                handleZipUpload(req, newProblemId, res);
-            });
+            if (req.user.role !== 'root' && problem.authorId !== req.user.id) {
+                res.status(403).send("无权修改此题目");
+                return;
+            }
+
+            execute("UPDATE problems SET title = ?, description = ?, timeLimit = ? WHERE id = ?",
+                [title, description, timeLimit, id]);
+            handleZipUpload(req, Number(id), res);
+        } else {
+            const result = execute(`INSERT INTO problems (title, description, authorId, timeLimit) VALUES (?, ?, ?, ?)`,
+                [title, description, req.user.id, timeLimit]);
+            const newProblemId = Number(result.lastInsertRowid);
+            handleZipUpload(req, newProblemId, res);
+        }
+    } catch (err) {
+        logger.error('Error saving problem', err as Error);
+        res.status(500).send('服务器错误');
     }
 });
 
-const handleZipUpload = (req: express.Request, problemId: number, res: express.Response): void => {
+function handleZipUpload(req: any, problemId: number, res: any): void {
     if (req.file) {
         try {
             const zip = new AdmZip(req.file.path);
@@ -67,91 +61,93 @@ const handleZipUpload = (req: express.Request, problemId: number, res: express.R
     } else {
         res.redirect('/');
     }
-};
+}
 
-router.get('/problem/edit/:id', requireRole('super_user'), (req, res) => {
-    db.get("SELECT * FROM problems WHERE id = ?", [req.params.id], (err: Error, problem: any) => {
-        if (err) {
-            logger.error('Error fetching problem for edit page', err);
-            return res.status(500).send('服务器错误');
+router.get('/problem/edit/:id', requireRole('super_user'), (req, res, next) => {
+    try {
+        const problem = queryOne<Problem>("SELECT * FROM problems WHERE id = ?", [req.params.id]);
+        if (!problem) {
+            res.status(404).send('题目不存在');
+            return;
         }
-        if (!problem) return res.status(404).send('题目不存在');
-        res.render('problem_edit', { problem: problem });
-    });
+        res.render('problem_edit', { problem });
+    } catch (err) {
+        logger.error('Error fetching problem for edit page', err as Error);
+        res.status(500).send('服务器错误');
+    }
 });
 
-router.get('/problem/:id', (req, res) => {
-    db.get("SELECT * FROM problems WHERE id = ?", [req.params.id], (err: Error, problem: any) => {
-        if (err) {
-            logger.error('Error fetching problem details', err);
-            return res.status(500).send('服务器错误');
+router.get('/problem/:id', (req, res, next) => {
+    try {
+        const problem = queryOne<Problem>("SELECT * FROM problems WHERE id = ?", [req.params.id]);
+        if (!problem) {
+            res.status(404).send('Not Found');
+            return;
         }
-        if (!problem) return res.status(404).send('Not Found');
-        res.render('problem', { problem: problem });
-    });
+        res.render('problem', { problem });
+    } catch (err) {
+        logger.error('Error fetching problem details', err as Error);
+        res.status(500).send('服务器错误');
+    }
 });
 
-router.post('/submit', requireLogin, (req, res) => {
+router.post('/submit', requireLogin, (req, res, next) => {
     const { problemId, language, code } = req.body;
     const submissionTime = new Date().toLocaleString();
-    db.run(`INSERT INTO submissions (problemId, userId, username, language, code, status, time, caseResults) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [problemId, (req.user! as any).id, (req.user! as any).username, language, code, "Pending", submissionTime, JSON.stringify([])], function(err: Error) {
-            if (err) {
-                logger.error('Error inserting new submission', err);
-                return res.status(500).send('服务器错误');
-            }
-            const newSubmissionId = this.lastID;
-            res.redirect('/status');
-        });
+    try {
+        const result = execute(`INSERT INTO submissions (problemId, userId, username, language, code, status, time, caseResults) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            [problemId, req.user.id, req.user.username, language, code, "Pending", submissionTime, JSON.stringify([])]);
+        res.redirect('/status');
+    } catch (err) {
+        logger.error('Error inserting new submission', err as Error);
+        res.status(500).send('服务器错误');
+    }
 });
 
-router.get('/status', (req, res) => {
-    db.all("SELECT * FROM submissions ORDER BY id DESC", [], (err: Error, submissions: any[]) => {
-        if (err) {
-            logger.error('Error fetching submissions for status page', err);
-            return res.status(500).send('服务器错误');
-        }
+router.get('/status', (req, res, next) => {
+    try {
+        const submissions = query<any>("SELECT * FROM submissions ORDER BY id DESC");
         submissions.forEach(sub => {
             if (sub.caseResults) {
                 try {
                     sub.caseResults = JSON.parse(sub.caseResults);
-                } catch (e) {
-                    logger.error(`Error parsing caseResults for submission ${sub.id}`, e as Error);
+                } catch (_) {
                     sub.caseResults = [];
                 }
             }
         });
-        res.render('status', { submissions: submissions });
-    });
+        res.render('status', { submissions });
+    } catch (err) {
+        logger.error('Error fetching submissions for status page', err as Error);
+        res.status(500).send('服务器错误');
+    }
 });
 
-router.get('/submission/:id', requireLogin, (req, res) => {
-    db.get("SELECT * FROM submissions WHERE id = ?", [req.params.id], (err: Error, sub: any) => {
-        if (err) {
-            logger.error('Error fetching submission details', err);
-            return res.status(500).send('服务器错误');
+router.get('/submission/:id', requireLogin, (req, res, next) => {
+    try {
+        const sub = queryOne<any>("SELECT * FROM submissions WHERE id = ?", [req.params.id]);
+        if (!sub) {
+            res.status(404).send('提交不存在');
+            return;
         }
-        if (!sub) return res.status(404).send('提交不存在');
 
-        db.get("SELECT role FROM users WHERE id = ?", [req.user!.id], (err: Error, userRole: any) => {
-            if (err) {
-                logger.error('Error fetching user role for submission view', err);
-                return res.status(500).send('服务器错误');
+        const userRole = queryOne<{ role: string }>("SELECT role FROM users WHERE id = ?", [req.user.id]);
+        if (sub.userId !== req.user.id && (ROLE_LV[userRole?.role || 'default'] ?? -1) < (ROLE_LV['super_user'] ?? 0)) {
+            res.status(403).send("无权查看代码");
+            return;
+        }
+        if (sub.caseResults) {
+            try {
+                sub.caseResults = JSON.parse(sub.caseResults);
+            } catch (_) {
+                sub.caseResults = [];
             }
-            if (sub.userId !== req.user!.id && ROLE_LV[userRole.role] < ROLE_LV['super_user']) {
-                return res.status(403).send("无权查看代码");
-            }
-            if (sub.caseResults) {
-                try {
-                    sub.caseResults = JSON.parse(sub.caseResults);
-                } catch (e) {
-                    logger.error(`Error parsing caseResults for submission ${sub.id}`, e as Error);
-                    sub.caseResults = [];
-                }
-            }
-            res.render('submission', { sub: sub });
-        });
-    });
+        }
+        res.render('submission', { sub });
+    } catch (err) {
+        logger.error('Error fetching submission details', err as Error);
+        res.status(500).send('服务器错误');
+    }
 });
 
 export default router;

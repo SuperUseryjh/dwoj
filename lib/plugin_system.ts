@@ -2,22 +2,21 @@ import fs from 'fs-extra';
 import path from 'path';
 import crypto from 'crypto';
 import logger from './logger';
-import db from './database';
-import { Application } from 'express';
-import { OJContext, PluginModule, PluginInfo, PluginConfig } from '../types';
+import { queryOne, execute } from './database';
 
+// New Plugin class
 class Plugin {
-    private module: PluginModule;
-    private oj: OJContext;
-    private db: any;
-    public token: string;
-    private permissions: Set<string>;
-    public exports: Record<string, any>;
-    private pluginSystem: PluginSystem;
-    public ojProxy: any;
-    public dbProxy: any;
+    module: Record<string, any>;
+    oj: any;
+    db: any;
+    token: string;
+    permissions: Set<string>;
+    exports: any;
+    pluginSystem: PluginSystem;
+    ojProxy: any;
+    dbProxy: any;
 
-    constructor(pluginModule: PluginModule, oj: OJContext, db: any, token: string, permissions: string[], pluginSystemRef: PluginSystem) {
+    constructor(pluginModule: any, oj: any, db: any, token: string, permissions: string[], pluginSystemRef: PluginSystem) {
         this.module = pluginModule;
         this.oj = oj;
         this.db = db;
@@ -30,23 +29,23 @@ class Plugin {
         this.dbProxy = this._createPermissionProxy(this.db, 'db');
     }
 
-    private _checkPermission(resource: string, action: string, permissionToCheck?: string): void {
+    _checkPermission(resource: string, action: string, permissionToCheck?: string): void {
         const actualPermission = permissionToCheck || `${resource}_${action}`;
-        this.oj.logger.info(`[Plugin] Checking permission: ${actualPermission}, Plugin permissions: ${Array.from(this.permissions).join(', ')}`);
         if (!this.permissions.has(actualPermission)) {
             this.oj.logger.warn(`[Plugin] Plugin with token ${this.token} attempted unauthorized action: ${actualPermission}`);
             throw new Error(`Unauthorized action: ${actualPermission}`);
         }
     }
 
-    private _createPermissionProxy(target: any, resourceName: string): any {
+    _createPermissionProxy(target: any, resourceName: string): any {
+        const self = this;
         return new Proxy(target, {
-            get: (target: any, prop: string, receiver: any) => {
+            get(target: any, prop: string | symbol, receiver: any) {
                 if (resourceName === 'db') {
                     if (typeof target[prop] === 'function') {
-                        const action = prop.startsWith('get') || prop.startsWith('all') || prop.startsWith('each') ? 'read' : 'write';
+                        const action = String(prop).startsWith('get') || String(prop).startsWith('all') || String(prop).startsWith('each') ? 'read' : 'write';
                         const permissionToCheck = `${action}_${resourceName}`;
-                        this._checkPermission(resourceName, action, permissionToCheck);
+                        self._checkPermission(resourceName, action, permissionToCheck);
                         return target[prop].bind(target);
                     }
                     return Reflect.get(target, prop, receiver);
@@ -54,19 +53,19 @@ class Plugin {
                     if (prop === 'app' || prop === 'config' || prop === 'logger') {
                         return Reflect.get(target, prop, receiver);
                     }
-                    this._checkPermission(resourceName, 'access');
+                    self._checkPermission(resourceName, 'access');
                     return Reflect.get(target, prop, receiver);
                 }
                 return Reflect.get(target, prop, receiver);
             },
-            apply: (target: any, thisArg: any, argumentsList: any) => {
-                this._checkPermission(resourceName, 'execute');
+            apply(target: any, thisArg: any, argumentsList: any[]) {
+                self._checkPermission(resourceName, 'execute');
                 return Reflect.apply(target, thisArg, argumentsList);
             }
         });
     }
 
-    public executeHook(hookName: string, ...args: any[]): any {
+    executeHook(hookName: string, ...args: any[]): any {
         if (typeof this.module[hookName] === 'function') {
             const getPluginExports = (pluginName: string) => this.pluginSystem.getPluginExports(pluginName);
             return this.module[hookName](this.ojProxy, this.dbProxy, getPluginExports, ...args);
@@ -75,15 +74,26 @@ class Plugin {
     }
 }
 
-class PluginSystem {
-    private pluginDir: string;
-    private plugins: Record<string, any>;
-    private oj: OJContext;
-    private db: any;
-    private app: Application;
-    private pluginExports: Record<string, any>;
+export interface PluginInfo {
+    module: Plugin;
+    filename: string;
+    enabled: boolean;
+    name: string;
+    description: string;
+    version: string;
+    token: string;
+    permissions: string[];
+}
 
-    constructor(pluginDir: string, ojRef: OJContext) {
+class PluginSystem {
+    pluginDir: string;
+    plugins: Record<string, PluginInfo> = {};
+    oj: any;
+    db: any;
+    app: any;
+    pluginExports: Record<string, any> = {};
+
+    constructor(pluginDir: string, ojRef: any) {
         this.pluginDir = pluginDir;
         this.plugins = {};
         this.oj = ojRef;
@@ -94,8 +104,8 @@ class PluginSystem {
         fs.ensureDirSync(pluginDir);
     }
 
-    public async loadAll(): Promise<void> {
-        const files = fs.readdirSync(this.pluginDir).filter(f => f.endsWith('.js'));
+    async loadAll(): Promise<void> {
+        const files = fs.readdirSync(this.pluginDir).filter((f: string) => f.endsWith('.js'));
         this.plugins = {};
         this.pluginExports = {};
 
@@ -103,17 +113,12 @@ class PluginSystem {
             const fullPath = path.join(this.pluginDir, file);
             try {
                 delete require.cache[require.resolve(fullPath)];
-                const pluginModule: PluginModule = require(fullPath);
+                const pluginModule = require(fullPath);
 
                 const manifest = pluginModule.manifest || {};
                 const requestedPermissions = manifest.permissions || [];
 
-                const dbConfig: PluginConfig | undefined = await new Promise((resolve, reject) => {
-                    this.db.get("SELECT enabled, token, permissions FROM plugin_configs WHERE filename = ?", [file], (err: Error, row: PluginConfig) => {
-                        if (err) reject(err);
-                        else resolve(row);
-                    });
-                });
+                const dbConfig = queryOne("SELECT enabled, token, permissions FROM plugin_configs WHERE filename = ?", [file]);
 
                 let isEnabled = dbConfig ? (dbConfig.enabled === 1) : false;
                 let token = dbConfig ? dbConfig.token : crypto.randomBytes(16).toString('hex');
@@ -122,14 +127,8 @@ class PluginSystem {
                 this.oj.logger.info(`[PluginSystem] Loading ${file}: dbConfig = ${JSON.stringify(dbConfig)}, grantedPermissions = ${JSON.stringify(grantedPermissions)}`);
 
                 if (!dbConfig || !dbConfig.token) {
-                    await new Promise((resolve, reject) => {
-                        this.db.run("INSERT OR REPLACE INTO plugin_configs (filename, enabled, token, permissions) VALUES (?, ?, ?, ?)",
-                            [file, isEnabled ? 1 : 0, token, JSON.stringify(grantedPermissions)],
-                            (err: Error) => {
-                                if (err) reject(err);
-                                else resolve(undefined);
-                            });
-                    });
+                    execute("INSERT OR REPLACE INTO plugin_configs (filename, enabled, token, permissions) VALUES (?, ?, ?, ?)",
+                        [file, isEnabled ? 1 : 0, token, JSON.stringify(grantedPermissions)]);
                 }
 
                 const wrappedPlugin = new Plugin(pluginModule, this.oj, this.db, token, grantedPermissions, this);
@@ -160,13 +159,13 @@ class PluginSystem {
         }
     }
 
-    public getPluginExports(pluginName: string): any {
+    getPluginExports(pluginName: string): any {
         return this.pluginExports[pluginName];
     }
 
-    public emit(hookName: string, ...args: any[]): any[] {
-        let results: any[] = [];
-        Object.values(this.plugins).forEach((p: any) => {
+    emit(hookName: string, ...args: any[]): any[] {
+        const results: any[] = [];
+        Object.values(this.plugins).forEach(p => {
             if (p.enabled) {
                 try {
                     const res = p.module.executeHook(hookName, ...args);
@@ -179,9 +178,9 @@ class PluginSystem {
         return results;
     }
 
-    public getList(): PluginInfo[] {
-        const list: PluginInfo[] = [];
-        Object.values(this.plugins).forEach((p: any) => {
+    getList(): any[] {
+        const list: any[] = [];
+        Object.values(this.plugins).forEach(p => {
             list.push({
                 filename: p.filename,
                 name: p.name,
@@ -192,30 +191,23 @@ class PluginSystem {
                 permissions: p.permissions
             });
         });
-
         const loadedFiles = new Set(Object.keys(this.plugins));
-        const allFiles = fs.readdirSync(this.pluginDir).filter(f => f.endsWith('.js'));
+        const allFiles = fs.readdirSync(this.pluginDir).filter((f: string) => f.endsWith('.js'));
         allFiles.forEach(f => {
             if (!loadedFiles.has(f)) {
-                list.push({ filename: f, name: "Unknown/Error", enabled: false, desc: '', version: '', token: '', permissions: [] });
+                list.push({ filename: f, name: "Unknown/Error", enabled: false });
             }
         });
         return list;
     }
 
-    public async toggle(filename: string, enabled: boolean): Promise<void> {
+    async toggle(filename: string, enabled: boolean): Promise<void> {
         const enabledValue = enabled ? 1 : 0;
-        await new Promise<void>((resolve, reject) => {
-            this.db.run("UPDATE plugin_configs SET enabled = ? WHERE filename = ?", [enabledValue, filename], (err: Error) => {
-                if (err) reject(err);
-                else resolve();
-            });
-        });
-
+        execute("UPDATE plugin_configs SET enabled = ? WHERE filename = ?", [enabledValue, filename]);
         await this.loadAll();
     }
 
-    public async delete(filename: string): Promise<void> {
+    async delete(filename: string): Promise<void> {
         const p = path.join(this.pluginDir, filename);
         if (fs.existsSync(p)) {
             try {
@@ -224,12 +216,7 @@ class PluginSystem {
                 logger.error(`Error deleting plugin file ${p}`, e as Error);
             }
         }
-        await new Promise<void>((resolve, reject) => {
-            this.db.run("DELETE FROM plugin_configs WHERE filename = ?", [filename], (err: Error) => {
-                if (err) reject(err);
-                else resolve();
-            });
-        });
+        execute("DELETE FROM plugin_configs WHERE filename = ?", [filename]);
         await this.loadAll();
     }
 }

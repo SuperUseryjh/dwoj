@@ -1,22 +1,19 @@
 {
   "compilerOptions": {
-    "target": "ES2020",
+    "target": "ES2022",
     "module": "commonjs",
-    "lib": ["ES2020"],
-    "outDir": "./dist",
-    "rootDir": "./",
-    "strict": false,
+    "moduleResolution": "node10",
     "esModuleInterop": true,
+    "strict": true,
+    "outDir": "./dist",
+    "rootDir": ".",
+    "declaration": true,
+    "sourceMap": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
-    "declaration": true,
-    "declarationMap": true,
-    "sourceMap": true,
-    "moduleResolution": "node",
-    "allowJs": true,
-    "checkJs": false,
     "allowSyntheticDefaultImports": true,
+    "types": ["bun"],
     "ignoreDeprecations": "6.0"
   },
   "include": [
@@ -25,10 +22,6 @@
   "exclude": [
     "node_modules",
     "dist",
-    "data",
-    "problems_data",
-    "uploads",
-    "plugins",
-    "log"
+    "**/*.test.ts"
   ]
 }

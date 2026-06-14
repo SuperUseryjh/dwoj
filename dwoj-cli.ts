@@ -1,19 +1,19 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 
 import fs from 'fs';
 import path from 'path';
 import readline from 'readline';
-import { exec, spawn } from 'child_process';
 import crypto from 'crypto';
+import { spawn } from 'child_process';
 
-const configPath = path.join(__dirname, 'config', 'index.js');
+const configPath = path.join(__dirname, 'config', 'index.ts');
 const logFilePath = path.join(__dirname, 'dwoj.log');
 
-const generateJwtSecret = (): string => {
+function generateJwtSecret(): string {
     return crypto.randomBytes(64).toString('hex');
-};
+}
 
-const updateJwtSecret = (secret: string): void => {
+function updateJwtSecret(secret: string): void {
     let configContent = fs.readFileSync(configPath, 'utf8');
     configContent = configContent.replace(
         /JWT_SECRET: process.env.JWT_SECRET \|\| '(.*?)'/,
@@ -21,9 +21,9 @@ const updateJwtSecret = (secret: string): void => {
     );
     fs.writeFileSync(configPath, configContent, 'utf8');
     console.log('JWT 密钥已更新。');
-};
+}
 
-const init = async (interactive: boolean): Promise<void> => {
+async function init(interactive: boolean): Promise<void> {
     let secret = '';
     if (interactive) {
         const rl = readline.createInterface({
@@ -45,7 +45,7 @@ const init = async (interactive: boolean): Promise<void> => {
                     input: process.stdin,
                     output: process.stdout
                 });
-                rl2.question('请输入您的 JWT 密钥：', resolve);
+                rl2.question('请输入您的 JWT 密钥: ', resolve);
                 rl2.close();
             });
             secret = manualSecret;
@@ -55,9 +55,9 @@ const init = async (interactive: boolean): Promise<void> => {
         console.log('已自动生成 JWT 密钥。');
     }
     updateJwtSecret(secret);
-};
+}
 
-const start = (port: number): void => {
+function start(port: number): void {
     let configContent = fs.readFileSync(configPath, 'utf8');
     if (configContent.includes("JWT_SECRET: process.env.JWT_SECRET || 'your_jwt_secret_key'")) {
         console.log('dwoj 未初始化，正在进行无交互初始化...');
@@ -65,24 +65,24 @@ const start = (port: number): void => {
     }
 
     console.log(`正在端口 ${port} 启动 dwoj...`);
-    const child = spawn('node', ['app.js'], {
+    const child = spawn('bun', ['app.ts'], {
         detached: true,
         stdio: ['ignore', fs.openSync(logFilePath, 'a'), fs.openSync(logFilePath, 'a')],
-        env: { ...process.env, PORT: port.toString() }
+        env: { ...process.env, PORT: String(port) }
     });
     child.unref();
     console.log(`dwoj 已在后台启动。日志文件：${logFilePath}`);
-};
+}
 
-const link = (): void => {
+function link(): void {
     console.log('正在链接 dwoj 日志 (Ctrl+C 退出)...');
     const tail = spawn('tail', ['-f', logFilePath], { stdio: 'inherit' });
 
-    tail.on('error', (err: any) => {
-        if (err.code === 'ENOENT') {
+    tail.on('error', (err: Error) => {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
             console.error(`错误：日志文件 ${logFilePath} 不存在。请先使用 'dwoj start' 启动 dwoj。`);
         } else {
-            console.error(`tail 命令出错：${err.message}`);
+            console.error(`tail 命令出错: ${err.message}`);
         }
     });
 
@@ -91,9 +91,9 @@ const link = (): void => {
         tail.kill();
         process.exit();
     });
-};
+}
 
-const main = async (): Promise<void> => {
+async function main(): Promise<void> {
     const args = process.argv.slice(2);
     const command = args[0];
 
@@ -119,11 +119,11 @@ const main = async (): Promise<void> => {
             break;
         default:
             console.log('用法:');
-            console.log('  dwoj init [-inter] -> 提供 dwoj 初始化工具');
-            console.log('  dwoj start [-i 端口号] -> 在指定端口启动 dwoj');
-            console.log('  dwoj link -> 链接 dwoj，在终端显示本次启动日志');
+            console.log('  dwoj init [-inter] -> 提供dwoj初始化工具');
+            console.log('  dwoj start [-i 端口号] -> 在指定端口启动dwoj');
+            console.log('  dwoj link -> 链接dwoj，在终端显示本次启动日志');
             break;
     }
-};
+}
 
 main();

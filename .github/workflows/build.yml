@@ -1,0 +1,163 @@
+name: Build
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: TypeScript check
+        run: bun run tsc --noEmit
+
+      - name: Run tests
+        run: bun test
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: test
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: bun-linux-x64
+            runner: ubuntu-latest
+            suffix: ''
+          - target: bun-linux-arm64
+            runner: ubuntu-latest
+            suffix: ''
+          - target: bun-darwin-x64
+            runner: macos-latest
+            suffix: ''
+          - target: bun-darwin-arm64
+            runner: macos-latest
+            suffix: ''
+          - target: bun-windows-x64
+            runner: windows-latest
+            suffix: .exe
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build server binary
+        run: |
+          bun build --compile --target=${{ matrix.target }} ./app.ts -o ./dist/dwoj-server${{ matrix.suffix }}
+
+      - name: Build CLI binary
+        run: |
+          bun build --compile --target=${{ matrix.target }} ./dwoj-cli.ts -o ./dist/dwoj${{ matrix.suffix }}
+
+      - name: Package assets (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p ./dwoj-release
+          cp ./dist/dwoj-server ./dwoj-release/
+          cp ./dist/dwoj ./dwoj-release/
+          cp -r ./views ./dwoj-release/
+          cp -r ./public ./dwoj-release/
+          cp ./package.json ./dwoj-release/
+          cp ./plugin.md ./dwoj-release/
+          cp ./README.md ./dwoj-release/
+          cd ./dwoj-release && tar czf ../dwoj-${{ matrix.target }}.tar.gz .
+
+      - name: Package assets (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path .\dwoj-release -Force
+          Copy-Item .\dist\dwoj-server.exe .\dwoj-release\
+          Copy-Item .\dist\dwoj.exe .\dwoj-release\
+          Copy-Item -Recurse .\views .\dwoj-release\
+          Copy-Item -Recurse .\public .\dwoj-release\
+          Copy-Item .\package.json .\dwoj-release\
+          Copy-Item .\plugin.md .\dwoj-release\
+          Copy-Item .\README.md .\dwoj-release\
+          Compress-Archive -Path .\dwoj-release\* -DestinationPath .\dwoj-${{ matrix.target }}.zip
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dwoj-${{ matrix.target }}
+          path: |
+            dwoj-${{ matrix.target }}.tar.gz
+            dwoj-${{ matrix.target }}.zip
+          if-no-files-found: error
+
+  release:
+    name: Release
+    needs: build
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      is_prerelease: ${{ steps.version.outputs.is_prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read version and determine release type
+        id: version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          if echo "$VERSION" | grep -qE '^\d+\.\d+\.\d+$'; then
+            echo "is_prerelease=false" >> $GITHUB_OUTPUT
+          else
+            echo "is_prerelease=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: dwoj-*
+          path: ./artifacts
+          merge-multiple: true
+
+      - name: Generate release notes
+        run: |
+          echo "DWOJ v${{ steps.version.outputs.version }}" > ./release-notes.md
+          echo "---" >> ./release-notes.md
+          echo "" >> ./release-notes.md
+          for file in ./artifacts/*; do
+            name=$(basename "$file")
+            size=$(du -h "$file" | cut -f1)
+            echo "- $name ($size)" >> ./release-notes.md
+          done
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: v${{ steps.version.outputs.version }}
+          body_path: ./release-notes.md
+          files: ./artifacts/*
+          draft: false
+          prerelease: ${{ steps.version.outputs.is_prerelease == 'true' }}

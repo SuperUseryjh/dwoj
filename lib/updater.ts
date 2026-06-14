@@ -1,16 +1,16 @@
 import fs from 'fs-extra';
 import path from 'path';
 import axios from 'axios';
-import tar from 'tar';
-import config from '../config';
+import * as tar from 'tar';
+import * as config from '../config';
 import logger from './logger';
 
 class Updater {
-    private appRoot: string;
-    private updateCheckUrl: string;
-    private updatePackageUrl: string;
-    private currentVersion: string;
-    private tempDir: string;
+    appRoot: string;
+    updateCheckUrl: string;
+    updatePackageUrl: string;
+    currentVersion: string;
+    tempDir: string;
 
     constructor(appRoot: string) {
         this.appRoot = appRoot;
@@ -20,7 +20,7 @@ class Updater {
         this.tempDir = path.join(appRoot, 'temp_update');
     }
 
-    public async checkAndApplyUpdate(): Promise<boolean> {
+    async checkAndApplyUpdate(): Promise<boolean> {
         logger.info('[Updater] Checking for updates...');
         try {
             const response = await axios.get(this.updateCheckUrl);
@@ -49,7 +49,7 @@ class Updater {
         }
     }
 
-    private async downloadAndExtractUpdate(version: string): Promise<void> {
+    async downloadAndExtractUpdate(version: string): Promise<void> {
         logger.info(`[Updater] Downloading update package from ${this.updatePackageUrl}`);
         const tempPackagePath = path.join(this.tempDir, `dwoj-${version}.tar.gz`);
 
@@ -65,8 +65,8 @@ class Updater {
         response.data.pipe(writer);
 
         await new Promise<void>((resolve, reject) => {
-            writer.on('finish', () => resolve());
-            writer.on('error', (err: Error) => reject(err));
+            writer.on('finish', resolve);
+            writer.on('error', reject);
         });
         logger.info('[Updater] Update package downloaded.');
 
@@ -83,11 +83,8 @@ class Updater {
         logger.info('[Updater] Applying update...');
         let extractedContentPath = extractDir;
         const filesInExtractDir = await fs.readdir(extractDir);
-        if (filesInExtractDir.length === 1) {
-            const stat = await fs.stat(path.join(extractDir, filesInExtractDir[0]));
-            if (stat.isDirectory()) {
-                extractedContentPath = path.join(extractDir, filesInExtractDir[0]);
-            }
+        if (filesInExtractDir.length === 1 && await fs.stat(path.join(extractDir, filesInExtractDir[0])).then(s => s.isDirectory())) {
+            extractedContentPath = path.join(extractDir, filesInExtractDir[0]);
         }
 
         await fs.copy(extractedContentPath, this.appRoot, { overwrite: true });

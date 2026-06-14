@@ -1,8 +1,7 @@
 import fs from 'fs';
 import path from 'path';
-import { Logger } from '../types';
 
-const logDir = path.join(__dirname, '..', 'log');
+const logDir: string = path.join(__dirname, '..', 'log');
 
 if (!fs.existsSync(logDir)) {
     fs.mkdirSync(logDir);
@@ -19,10 +18,15 @@ const getLogFileName = (): string => {
     return `app_${year}${month}${day}_${hours}${minutes}${seconds}.log`;
 };
 
-const logFileName = getLogFileName();
-const logFilePath = path.join(logDir, logFileName);
+const logFileName: string = getLogFileName();
+const logFilePath: string = path.join(logDir, logFileName);
+const logStream: fs.WriteStream = fs.createWriteStream(logFilePath, { flags: 'a' });
 
-const logStream = fs.createWriteStream(logFilePath, { flags: 'a' });
+export interface Logger {
+    info: (message: string) => void;
+    warn: (message: string) => void;
+    error: (message: string, error?: Error) => void;
+}
 
 const logger: Logger = {
     info: (message: string) => {
@@ -42,7 +46,7 @@ const logger: Logger = {
         const errorMessage = `[ERROR] ${timestamp}: ${message}\n`;
         console.error(errorMessage.trim());
         logStream.write(errorMessage);
-        if (error) {
+        if (error?.stack) {
             logStream.write(error.stack + '\n');
         }
     }

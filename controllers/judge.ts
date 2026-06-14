@@ -1,25 +1,20 @@
-import { spawn } from 'child_process';
+import { spawn, ChildProcess } from 'child_process';
 import fs from 'fs-extra';
 import path from 'path';
-import config from '../config';
-import db from '../lib/database';
+import * as config from '../config';
+import { queryOne, execute } from '../lib/database';
 import logger from '../lib/logger';
-import PluginSystem from '../lib/plugin_system';
-import { Submission } from '../types';
 
-export const runJudge = async (submissionId: number, pluginManager: PluginSystem): Promise<void> => {
-    db.get("SELECT * FROM submissions WHERE id = ?", [submissionId], async (err: Error, sub: Submission) => {
-        if (err) {
-            logger.error(`Error fetching submission ${submissionId} for judging`, err);
-            return;
-        }
+export async function runJudge(submissionId: number, pluginManager: any): Promise<void> {
+    try {
+        const sub = queryOne<any>("SELECT * FROM submissions WHERE id = ?", [submissionId]);
         if (!sub) return;
 
         if (sub.caseResults) {
             try {
-                sub.caseResults = JSON.parse(sub.caseResults as any);
-            } catch (e) {
-                logger.error(`Error parsing caseResults for submission ${submissionId}`, e as Error);
+                sub.caseResults = JSON.parse(sub.caseResults);
+            } catch (_) {
+                logger.error(`Error parsing caseResults for submission ${submissionId}`);
                 sub.caseResults = [];
             }
         } else {
@@ -31,21 +26,16 @@ export const runJudge = async (submissionId: number, pluginManager: PluginSystem
         const probPath = path.join(config.PROB_DIR, sub.problemId.toString());
         if (!fs.existsSync(probPath)) {
             sub.status = "Data Error";
-            sub.result = "测试数据丢失";
-            db.run("UPDATE submissions SET status = ?, result = ? WHERE id = ?", [sub.status, sub.result, sub.id], (err: Error) => {
-                if (err) logger.error(`Error updating submission ${sub.id} status`, err);
-            });
+            execute("UPDATE submissions SET status = ? WHERE id = ?", [sub.status, sub.id]);
             return;
         }
 
         const files = fs.readdirSync(probPath);
-        const inputs = files.filter(f => f.endsWith('.in'));
+        const inputs = files.filter((f: string) => f.endsWith('.in'));
 
         if (inputs.length === 0) {
             sub.status = "Data Error";
-            db.run("UPDATE submissions SET status = ? WHERE id = ?", [sub.status, sub.id], (err: Error) => {
-                if (err) logger.error(`Error updating submission ${sub.id} status`, err);
-            });
+            execute("UPDATE submissions SET status = ? WHERE id = ?", [sub.status, sub.id]);
             return;
         }
 
@@ -82,17 +72,16 @@ export const runJudge = async (submissionId: number, pluginManager: PluginSystem
 
         pluginManager.emit('afterJudge', sub);
 
-        db.run("UPDATE submissions SET status = ?, errorInfo = ?, caseResults = ? WHERE id = ?",
-            [sub.status, sub.errorInfo || null, JSON.stringify(sub.caseResults), sub.id], (err: Error) => {
-                if (err) logger.error(`Error updating submission ${sub.id} after judging`, err);
-            });
-    });
-};
+        execute("UPDATE submissions SET status = ?, errorInfo = ?, caseResults = ? WHERE id = ?",
+            [sub.status, sub.errorInfo || null, JSON.stringify(sub.caseResults), sub.id]);
+    } catch (err) {
+        logger.error(`Error in runJudge for submission ${submissionId}`, err as Error);
+    }
+}
 
-export const executeCode = (lang: string, code: string, input: string): Promise<string> => {
+function executeCode(lang: string, code: string, input: string): Promise<string> {
     return new Promise((resolve, reject) => {
-        const extension = lang === 'python' ? 'py' : 'js';
-        const fileName = `sol_${Date.now()}_${Math.random().toString(36).substr(2)}.${extension}`;
+        const fileName = `sol_${Date.now()}_${Math.random().toString(36).substr(2)}.${lang === 'python' ? 'py' : 'js'}`;
         const filePath = path.join(config.UPLOAD_DIR, fileName);
 
         fs.writeFileSync(filePath, code);
@@ -102,10 +91,10 @@ export const executeCode = (lang: string, code: string, input: string): Promise<
         if (lang === 'python') {
             cmd = isWin ? 'python' : 'python3';
         } else {
-            cmd = 'node';
+            cmd = 'bun';
         }
 
-        const child = spawn(cmd, [filePath]);
+        const child: ChildProcess = spawn(cmd, [filePath]);
 
         let output = '', errStr = '';
         const timer = setTimeout(() => {
@@ -113,15 +102,15 @@ export const executeCode = (lang: string, code: string, input: string): Promise<
             reject('Time Limit Exceeded');
         }, 2000);
 
-        child.stdin.write(input + '\n');
-        child.stdin.end();
+        child.stdin!.write(input + '\n');
+        child.stdin!.end();
 
-        child.stdout.on('data', (c: Buffer) => output += c.toString());
-        child.stderr.on('data', (c: Buffer) => errStr += c.toString());
+        child.stdout!.on('data', (c: Buffer) => output += c);
+        child.stderr!.on('data', (c: Buffer) => errStr += c);
 
-        child.on('close', (code: number) => {
+        child.on('close', (code: number | null) => {
             clearTimeout(timer);
-            try { fs.unlinkSync(filePath); } catch (e) { logger.error(`Error deleting temp file ${filePath}`, e as Error); }
+            try { fs.unlinkSync(filePath); } catch (_) { logger.error(`Error deleting temp file ${filePath}`); }
 
             if (code !== 0) {
                 reject(errStr || `Runtime Error (Process exited with code ${code})`);
@@ -135,6 +124,4 @@ export const executeCode = (lang: string, code: string, input: string): Promise<
             reject(`System Error: ${err.message}`);
         });
     });
-};
-
-export default { runJudge, executeCode };
+}

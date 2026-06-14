@@ -1,11 +1,9 @@
-import db from '../lib/database';
 import MarkdownIt from 'markdown-it';
-import logger from '../lib/logger';
 import jwt from 'jsonwebtoken';
-import config from '../config';
-import { Request, Response, NextFunction } from 'express';
-import PluginSystem from '../lib/plugin_system';
-import { User } from '../types';
+import { queryOne } from '../lib/database';
+import logger from '../lib/logger';
+import * as config from '../config';
+import { ROLE_LV } from './auth';
 
 const md = new MarkdownIt({
     html: false,
@@ -13,35 +11,50 @@ const md = new MarkdownIt({
     linkify: true
 });
 
-export default (pluginManager: PluginSystem) => {
-    return (req: Request, res: Response, next: NextFunction): void => {
-        (res.locals as any).ROLE_LV = { 'default': 0, 'super_user': 1, 'root': 2 };
+export default (pluginManager: any) => {
+    return (req: any, res: any, next: () => Promise<void>) => {
+        res.locals.ROLE_LV = ROLE_LV;
         const token = req.cookies.token;
         const uid = req.cookies.uid;
 
-        if (token) {
-            jwt.verify(token, config.JWT_SECRET, (err: jwt.VerifyErrors | null, decoded: any) => {
-                if (err) {
-                    logger.warn('JWT verification failed: ' + err.message);
-                    req.user = null;
-                    res.clearCookie('token');
-                    res.clearCookie('uid');
-                    (res.locals as any).user = null;
-                    return next();
-                }
+        const finalize = () => {
+            res.locals.renderMarkdown = (content: string) => {
+                return md.render(content || '');
+            };
+            try {
+                const injectedHeaders: string[] = pluginManager.emit('injectHeader', req);
+                const injectedFooters: string[] = pluginManager.emit('injectFooter', req);
+                res.locals.pluginHeader = injectedHeaders.join('\n');
+                res.locals.pluginFooter = injectedFooters.join('\n');
+            } catch (e) {
+                logger.error('Error injecting plugin headers/footers', e as Error);
+                res.locals.pluginHeader = '';
+                res.locals.pluginFooter = '';
+            }
+            next();
+        };
 
-                db.get("SELECT id, username, role, bio, tags, isBanned FROM users WHERE id = ?", [decoded.id], (err: Error, user: User) => {
+        try {
+            if (token) {
+                jwt.verify(token, config.JWT_SECRET, (err: any, decoded: any) => {
                     if (err) {
-                        logger.error('Error fetching user from JWT payload in global middleware', err);
+                        logger.warn('JWT verification failed: ' + err.message);
                         req.user = null;
-                    } else if (user && user.isBanned) {
+                        res.clearCookie('token');
+                        res.clearCookie('uid');
+                        res.locals.user = null;
+                        return finalize();
+                    }
+
+                    const user = queryOne<any>("SELECT id, username, role, bio, tags, isBanned FROM users WHERE id = ?", [decoded.id]);
+                    if (user && user.isBanned) {
                         req.user = null;
                         res.clearCookie('token');
                         res.clearCookie('uid');
                     } else if (user) {
                         req.user = user;
-                        if ((req.user as any).tags) {
-                            (req.user as any).tags = JSON.parse((req.user as any).tags);
+                        if (req.user.tags) {
+                            try { req.user.tags = JSON.parse(req.user.tags); } catch (_) { req.user.tags = []; }
                         }
                         if (String(req.user.id) !== String(uid)) {
                             res.cookie('uid', req.user.id);
@@ -51,54 +64,34 @@ export default (pluginManager: PluginSystem) => {
                         res.clearCookie('token');
                         res.clearCookie('uid');
                     }
-                    (res.locals as any).user = req.user;
-                    (res.locals as any).renderMarkdown = (content: string) => {
-                        return md.render(content || '');
-                    };
-                    const injectedHeaders = pluginManager.emit('injectHeader', req);
-                    const injectedFooters = pluginManager.emit('injectFooter', req);
-                    (res.locals as any).pluginHeader = injectedHeaders.join('\n');
-                    (res.locals as any).pluginFooter = injectedFooters.join('\n');
-                    next();
+                    res.locals.user = req.user;
+                    finalize();
                 });
-            });
-        } else if (uid) {
-            db.get("SELECT id, username, role, bio, tags, isBanned FROM users WHERE id = ?", [uid], (err: Error, user: User) => {
-                if (err) {
-                    logger.error('Error fetching user from uid in global middleware', err);
-                    req.user = null;
-                } else if (user && user.isBanned) {
+            } else if (uid) {
+                const user = queryOne<any>("SELECT id, username, role, bio, tags, isBanned FROM users WHERE id = ?", [uid]);
+                if (user && user.isBanned) {
                     req.user = null;
                     res.clearCookie('uid');
                 } else if (user) {
                     req.user = user;
-                    if ((req.user as any).tags) {
-                        (req.user as any).tags = JSON.parse((req.user as any).tags);
+                    if (req.user.tags) {
+                        try { req.user.tags = JSON.parse(req.user.tags); } catch (_) { req.user.tags = []; }
                     }
                     const newToken = jwt.sign({ id: user.id, role: user.role }, config.JWT_SECRET, { expiresIn: '1h' });
                     res.cookie('token', newToken, { httpOnly: true, secure: process.env.NODE_ENV === 'production', maxAge: 3600000 });
                 }
-                (res.locals as any).user = req.user;
-                (res.locals as any).renderMarkdown = (content: string) => {
-                    return md.render(content || '');
-                };
-                const injectedHeaders = pluginManager.emit('injectHeader', req);
-                const injectedFooters = pluginManager.emit('injectFooter', req);
-                (res.locals as any).pluginHeader = injectedHeaders.join('\n');
-                (res.locals as any).pluginFooter = injectedFooters.join('\n');
-                next();
-            });
-        } else {
+                res.locals.user = req.user;
+                finalize();
+            } else {
+                req.user = null;
+                res.locals.user = null;
+                finalize();
+            }
+        } catch (err) {
+            logger.error('Error in global middleware', err as Error);
             req.user = null;
-            (res.locals as any).user = null;
-            (res.locals as any).renderMarkdown = (content: string) => {
-                return md.render(content || '');
-            };
-            const injectedHeaders = pluginManager.emit('injectHeader', req);
-            const injectedFooters = pluginManager.emit('injectFooter', req);
-            (res.locals as any).pluginHeader = injectedHeaders.join('\n');
-            (res.locals as any).pluginFooter = injectedFooters.join('\n');
-            next();
+            res.locals.user = null;
+            finalize();
         }
     };
 };

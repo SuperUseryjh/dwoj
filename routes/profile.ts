@@ -1,16 +1,18 @@
-import express from 'express';
+import { Router } from '../lib/bun-http';
 import { requireLogin } from '../middleware/auth';
-import db from '../lib/database';
+import { execute } from '../lib/database';
 import logger from '../lib/logger';
 
-const router = express.Router();
+const router = new Router();
 
-router.get('/profile', requireLogin, (req, res) => res.render('profile'));
+router.get('/profile', requireLogin, (req, res, next) => {
+    res.render('profile');
+});
 
-router.post('/profile', requireLogin, (req, res) => {
+router.post('/profile', requireLogin, (req, res, next) => {
     const { password, bio } = req.body;
-    let updateFields: string[] = [];
-    let updateValues: any[] = [];
+    const updateFields: string[] = [];
+    const updateValues: any[] = [];
 
     if (password) {
         updateFields.push("password = ?");
@@ -22,18 +24,19 @@ router.post('/profile', requireLogin, (req, res) => {
     }
 
     if (updateFields.length === 0) {
-        return res.redirect('/profile');
+        res.redirect('/profile');
+        return;
     }
 
-    updateValues.push(req.user!.id);
+    updateValues.push(req.user.id);
 
-    db.run(`UPDATE users SET ${updateFields.join(', ')} WHERE id = ?`, updateValues, function(err: Error) {
-        if (err) {
-            logger.error('Error updating user profile', err);
-            return res.status(500).send('服务器错误');
-        }
+    try {
+        execute(`UPDATE users SET ${updateFields.join(', ')} WHERE id = ?`, updateValues);
         res.redirect('/profile');
-    });
+    } catch (err) {
+        logger.error('Error updating user profile', err as Error);
+        res.status(500).send('服务器错误');
+    }
 });
 
 export default router;

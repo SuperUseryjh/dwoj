@@ -1,63 +1,69 @@
-import express from 'express';
+import { Router } from '../lib/bun-http';
 import jwt from 'jsonwebtoken';
-import config from '../config';
-import db from '../lib/database';
+import * as config from '../config';
+import { User, queryOne, execute } from '../lib/database';
 import logger from '../lib/logger';
 
-const router = express.Router();
+const router = new Router();
 
-router.get('/login', (req, res) => res.render('login'));
+router.get('/login', (req, res, next) => {
+    res.render('login');
+});
 
-router.post('/login', (req, res) => {
+router.post('/login', (req, res, next) => {
     const { username, password } = req.body;
-    db.get("SELECT id, username, password, role, isBanned FROM users WHERE username = ? AND password = ?", [username, password], (err: Error, user: any) => {
-        if (err) {
-            logger.error('Error during login', err);
-            return res.status(500).send('服务器错误');
-        }
+    try {
+        const user = queryOne<User>("SELECT id, username, password, role, isBanned FROM users WHERE username = ? AND password = ?", [username, password]);
         if (user) {
-            if (user.isBanned) return res.send('账号已被封禁');
+            if (user.isBanned) {
+                res.send('账号已被封禁');
+                return;
+            }
 
             const token = jwt.sign({ id: user.id, role: user.role }, config.JWT_SECRET, { expiresIn: '1h' });
 
             res.cookie('token', token, { httpOnly: true, secure: process.env.NODE_ENV === 'production', maxAge: 3600000 });
-            res.cookie('uid', user.id);
-
+            res.cookie('uid', String(user.id));
             res.redirect('/');
         } else {
             res.send('用户名或密码错误');
         }
-    });
+    } catch (err) {
+        logger.error('Error during login', err as Error);
+        res.status(500).send('服务器错误');
+    }
 });
 
-router.get('/register', (req, res) => {
-    if (req.cookies['device_banned']) return res.send('此设备已被禁止注册');
+router.get('/register', (req, res, next) => {
+    if (req.cookies['device_banned']) {
+        res.send('此设备已被禁止注册');
+        return;
+    }
     res.render('register');
 });
 
-router.post('/register', (req, res) => {
-    if (req.cookies['device_banned']) return res.status(403).send('Banned');
+router.post('/register', (req, res, next) => {
+    if (req.cookies['device_banned']) {
+        res.status(403).send('Banned');
+        return;
+    }
     const { username, password } = req.body;
-    db.get("SELECT id FROM users WHERE username = ?", [username], (err: Error, user: any) => {
-        if (err) {
-            logger.error('Error during registration check', err);
-            return res.status(500).send('服务器错误');
-        }
+    try {
+        const user = queryOne<User>("SELECT id FROM users WHERE username = ?", [username]);
         if (user) {
-            return res.send('用户名已存在');
+            res.send('用户名已存在');
+            return;
         }
-        db.run(`INSERT INTO users (username, password, role, bio, tags, isBanned) VALUES (?, ?, ?, ?, ?, ?)`,
-            [username, password, 'default', 'New user', JSON.stringify([]), 0], function(err: Error) {
-                if (err) {
-                    logger.error('Error inserting new user', err);
-                    return res.status(500).send('服务器错误');
-                }
-                res.redirect('/login');
-            });
-    });
+        execute(`INSERT INTO users (username, password, role, bio, tags, isBanned) VALUES (?, ?, ?, ?, ?, ?)`,
+            [username, password, 'default', 'New user', JSON.stringify([]), 0]);
+        res.redirect('/login');
+    } catch (err) {
+        logger.error('Error during registration', err as Error);
+        res.status(500).send('服务器错误');
+    }
 });
 
-router.get('/logout', (req, res) => {
+router.get('/logout', (req, res, next) => {
     res.clearCookie('uid');
     res.clearCookie('token');
     res.redirect('/');
