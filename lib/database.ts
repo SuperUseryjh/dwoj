@@ -152,20 +152,39 @@ export const initDb = (): void => {
     logger.info('Database tables checked/created.');
 };
 
-export const query = <T = any>(sql: string, params: any[] = []): T[] => {
+// 内部可替换的实现（允许插件劫持）
+let _queryImpl = <T = any>(sql: string, params: any[] = []): T[] => {
     return db.query(sql).all(...params) as T[];
 };
 
-export const queryOne = <T = any>(sql: string, params: any[] = []): T | undefined => {
+let _queryOneImpl = <T = any>(sql: string, params: any[] = []): T | undefined => {
     return db.query(sql).get(...params) as T | undefined;
 };
 
-export const execute = (sql: string, params: any[] = []): { lastInsertRowid: number; changes: number } => {
+let _executeImpl = (sql: string, params: any[] = []): { lastInsertRowid: number; changes: number } => {
     const result = db.run(sql, params);
     return {
         lastInsertRowid: Number(result.lastInsertRowid),
         changes: result.changes
     };
 };
+
+export const query = <T = any>(sql: string, params: any[] = []): T[] => _queryImpl(sql, params);
+
+export const queryOne = <T = any>(sql: string, params: any[] = []): T | undefined => _queryOneImpl(sql, params);
+
+export const execute = (sql: string, params: any[] = []): { lastInsertRowid: number; changes: number } => _executeImpl(sql, params);
+
+/** 插件专用的函数劫持 API — 替代直接修改 exports（readonly） */
+export function wrapDbFunction(
+    name: 'query' | 'queryOne' | 'execute',
+    wrapper: (original: (...args: any[]) => any) => (...args: any[]) => any,
+): void {
+    switch (name) {
+        case 'query': { const orig = _queryImpl; _queryImpl = wrapper(orig) as typeof _queryImpl; break; }
+        case 'queryOne': { const orig = _queryOneImpl; _queryOneImpl = wrapper(orig) as typeof _queryOneImpl; break; }
+        case 'execute': { const orig = _executeImpl; _executeImpl = wrapper(orig) as typeof _executeImpl; break; }
+    }
+}
 
 export { db };

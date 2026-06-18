@@ -83,6 +83,7 @@ export interface PluginInfo {
     version: string;
     token: string;
     permissions: string[];
+    builtin?: boolean;
 }
 
 class PluginSystem {
@@ -92,14 +93,16 @@ class PluginSystem {
     db: any;
     app: any;
     pluginExports: Record<string, any> = {};
+    private _builtinEnabled: Set<string> = new Set();
 
-    constructor(pluginDir: string, ojRef: any) {
+    constructor(pluginDir: string, ojRef: any, enabledBuiltins: string[] = []) {
         this.pluginDir = pluginDir;
         this.plugins = {};
         this.oj = ojRef;
         this.db = ojRef.db;
         this.app = ojRef.app;
         this.pluginExports = {};
+        this._builtinEnabled = new Set(enabledBuiltins.filter(Boolean));
 
         fs.ensureDirSync(pluginDir);
     }
@@ -157,6 +160,58 @@ class PluginSystem {
                 logger.error(`[Plugin] Failed to load ${file}:`, e as Error);
             }
         }
+
+        // 加载内置插件
+        this._loadBuiltinPlugins();
+    }
+
+    /** 内置插件注册表 */
+    private _builtinPluginRegistry(): Record<string, any> {
+        const registry: Record<string, any> = {};
+        try {
+            // eslint-disable-next-line @typescript-eslint/no-require-imports
+            registry['db-monitor'] = require('./builtin_plugins/db-monitor');
+        } catch (e) {
+            logger.error('[PluginSystem] Failed to load builtin plugin db-monitor:', e as Error);
+        }
+        return registry;
+    }
+
+    private _loadBuiltinPlugins(): void {
+        const registry = this._builtinPluginRegistry();
+
+        for (const [name, pluginModule] of Object.entries(registry)) {
+            const manifest = pluginModule.manifest || {};
+            const isEnabled = this._builtinEnabled.has(name);
+            const token = `builtin:${name}`;
+            const permissions = manifest.permissions || [];
+
+            const wrappedPlugin = new Plugin(pluginModule, this.oj, this.db, token, permissions, this);
+
+            const filename = `builtin:${name}`;
+            this.plugins[filename] = {
+                module: wrappedPlugin,
+                filename,
+                enabled: isEnabled,
+                name: manifest.name || name,
+                description: manifest.description || '',
+                version: manifest.version || '1.0.0',
+                token,
+                permissions,
+                builtin: true,
+            };
+
+            if (isEnabled) {
+                if (typeof pluginModule.onLoad === 'function') {
+                    wrappedPlugin.executeHook('onLoad');
+                }
+                this.pluginExports[manifest.name || name] = wrappedPlugin.exports;
+                if (typeof pluginModule.onRoute === 'function') {
+                    logger.info(`[Plugin] Hot-registering routes for builtin:${name}`);
+                    wrappedPlugin.executeHook('onRoute', this.app);
+                }
+            }
+        }
     }
 
     getPluginExports(pluginName: string): any {
@@ -188,26 +243,37 @@ class PluginSystem {
                 version: p.version,
                 enabled: p.enabled,
                 token: p.token,
-                permissions: p.permissions
+                permissions: p.permissions,
+                builtin: p.builtin || false,
             });
         });
-        const loadedFiles = new Set(Object.keys(this.plugins));
+        const loadedFiles = new Set(Object.keys(this.plugins).filter(k => !k.startsWith('builtin:')));
         const allFiles = fs.readdirSync(this.pluginDir).filter((f: string) => f.endsWith('.js'));
         allFiles.forEach(f => {
             if (!loadedFiles.has(f)) {
-                list.push({ filename: f, name: "Unknown/Error", enabled: false });
+                list.push({ filename: f, name: "Unknown/Error", enabled: false, builtin: false });
             }
         });
         return list;
     }
 
     async toggle(filename: string, enabled: boolean): Promise<void> {
-        const enabledValue = enabled ? 1 : 0;
-        execute("UPDATE plugin_configs SET enabled = ? WHERE filename = ?", [enabledValue, filename]);
+        if (filename.startsWith('builtin:')) {
+            const name = filename.slice('builtin:'.length);
+            if (enabled) this._builtinEnabled.add(name);
+            else this._builtinEnabled.delete(name);
+        } else {
+            const enabledValue = enabled ? 1 : 0;
+            execute("UPDATE plugin_configs SET enabled = ? WHERE filename = ?", [enabledValue, filename]);
+        }
         await this.loadAll();
     }
 
     async delete(filename: string): Promise<void> {
+        if (filename.startsWith('builtin:')) {
+            logger.warn(`[PluginSystem] Cannot delete builtin plugin: ${filename}`);
+            return;
+        }
         const p = path.join(this.pluginDir, filename);
         if (fs.existsSync(p)) {
             try {

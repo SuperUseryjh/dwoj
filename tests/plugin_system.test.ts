@@ -91,7 +91,10 @@ describe('PluginSystem', () => {
     test('loadAll loads no plugins when directory is empty', async () => {
         pluginSystem = new PluginSystem(TEST_PLUGIN_DIR, mockOj);
         await pluginSystem.loadAll();
-        expect(Object.keys(pluginSystem.plugins)).toHaveLength(0);
+        // built-in db-monitor is always registered (disabled by default)
+        expect(Object.keys(pluginSystem.plugins)).toHaveLength(1);
+        expect(pluginSystem.plugins['builtin:db-monitor']).toBeDefined();
+        expect(pluginSystem.plugins['builtin:db-monitor'].enabled).toBe(false);
     });
 
     test('loadAll loads valid .js plugins', async () => {
@@ -114,7 +117,7 @@ module.exports = {
         pluginSystem = new PluginSystem(TEST_PLUGIN_DIR, mockOj);
         await pluginSystem.loadAll();
 
-        expect(Object.keys(pluginSystem.plugins)).toHaveLength(1);
+        expect(Object.keys(pluginSystem.plugins)).toHaveLength(2); // 1 external + 1 built-in
         expect(pluginSystem.plugins['test-plugin.js'].name).toBe('test-plugin');
         expect(pluginSystem.plugins['test-plugin.js'].enabled).toBe(false); // Not in DB, default disabled
         expect(pluginSystem.plugins['test-plugin.js'].permissions).toEqual(['oj_access', 'db_read']);
@@ -127,7 +130,10 @@ module.exports = {
         pluginSystem = new PluginSystem(TEST_PLUGIN_DIR, mockOj);
         await pluginSystem.loadAll();
 
-        expect(Object.keys(pluginSystem.plugins)).toHaveLength(0);
+        // Only the built-in db-monitor plugin is registered
+        expect(Object.keys(pluginSystem.plugins)).toHaveLength(1);
+        expect(pluginSystem.plugins['builtin:db-monitor']).toBeDefined();
+        expect(pluginSystem.plugins['builtin:db-monitor'].enabled).toBe(false);
     });
 
     test('loadAll handles plugin load errors gracefully', async () => {
@@ -137,8 +143,9 @@ module.exports = {
         pluginSystem = new PluginSystem(TEST_PLUGIN_DIR, mockOj);
         await pluginSystem.loadAll();
 
-        // Should not throw, should just log error
-        expect(Object.keys(pluginSystem.plugins)).toHaveLength(0);
+        // Should not throw, should just log error; built-in plugin still registers
+        expect(Object.keys(pluginSystem.plugins)).toHaveLength(1);
+        expect(pluginSystem.plugins['builtin:db-monitor']).toBeDefined();
     });
 
     test('loadAll loads enabled plugin and registers routes', async () => {

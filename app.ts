@@ -30,7 +30,7 @@ app.use(app.static('public'));
 
 // 初始化插件系统
 const oj = { app, db: require('./lib/database').db, config, logger };
-const pluginManager = new PluginSystem(config.PLUGINS_DIR, oj);
+const pluginManager = new PluginSystem(config.PLUGINS_DIR, oj, config.ENABLED_BUILTIN_PLUGINS);
 pluginManager.loadAll();
 app.set('pluginManager', pluginManager);
 

@@ -187,9 +187,22 @@ export class App {
     _viewCache: Record<string, ejs.TemplateFunction> = {};
     _pluginManager: any = null;
     _server: any = null;
+    _router: Router = new Router();
 
     set(key: string, value: any): void { this._settings[key] = value; }
-    get(key: string): any { return this._settings[key]; }
+
+    /** 设置读取 (1 个参数) 或 HTTP 路由注册 (≥2 个参数) */
+    get(key: string, ...handlers: RouteHandler[]): any {
+        if (handlers.length > 0) {
+            this._router.get(key, ...handlers);
+            return;
+        }
+        return this._settings[key];
+    }
+
+    post(path: string, ...handlers: RouteHandler[]): void { this._router.post(path, ...handlers); }
+    put(path: string, ...handlers: RouteHandler[]): void { this._router.put(path, ...handlers); }
+    delete(path: string, ...handlers: RouteHandler[]): void { this._router.delete(path, ...handlers); }
 
     use(...args: any[]): void {
         if (args.length === 1) {
@@ -381,7 +394,11 @@ export class App {
         };
 
         // ---- 收集所有中间件和处理函数 ----
-        const allMiddleware: MiddlewareEntry[] = [...this._middleware];
+        const allMiddleware: MiddlewareEntry[] = [
+            // 通过 app.get/post/put/delete 注册的路由优先匹配
+            { prefix: '/', handler: this._router, isRouter: true },
+            ...this._middleware,
+        ];
 
         for (const mw of allMiddleware) {
             if (mw.isRouter && mw.handler instanceof Router) {
