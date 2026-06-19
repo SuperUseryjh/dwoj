@@ -1,7 +1,9 @@
 /node_modules
+/client/node_modules
 /data
 /uploads
 /log
 /plugins
 /problems_data
+/public/assets
 bun.lock

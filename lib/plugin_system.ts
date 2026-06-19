@@ -1,7 +1,8 @@
 import fs from 'fs-extra';
 import path from 'path';
 import crypto from 'crypto';
-import logger from './logger';
+import { createLogger } from './logger';
+const logger = createLogger('Plugin');
 import { queryOne, execute } from './database';
 
 // New Plugin class

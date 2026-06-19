@@ -1,7 +1,8 @@
 import { Database } from 'bun:sqlite';
 import path from 'path';
 import fs from 'fs-extra';
-import logger from './logger';
+import { createLogger } from './logger';
+const logger = createLogger('Database');
 
 const dbName: string = process.env.DWOJ_DB_NAME || 'dwoj.db';
 const dbPath: string = path.join(__dirname, '..', 'data', dbName);

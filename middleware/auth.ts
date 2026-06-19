@@ -1,5 +1,6 @@
 import { queryOne } from '../lib/database';
-import logger from '../lib/logger';
+import { createLogger } from '../lib/logger';
+const logger = createLogger('AuthMW');
 
 export const ROLE_LV: Record<string, number> = { 'default': 0, 'super_user': 1, 'root': 2 };
 

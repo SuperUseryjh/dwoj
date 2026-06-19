@@ -8,6 +8,11 @@
   "scripts": {
     "start": "bun app.ts",
     "dev": "bun --watch app.ts",
+    "dev:hot": "bun app.ts --dev",
+    "dev:client": "cd client && npx vite build --watch",
+    "dev:all": "powershell -Command \"Start-Process 'powershell' -ArgumentList '-NoExit -Command cd client; npx vite build --watch'; bun --watch app.ts\"",
+    "dev:hot:all": "powershell -Command \"Start-Process 'powershell' -ArgumentList '-NoExit -Command cd client; npx vite build --watch'; bun app.ts --dev\"",
+    "build:client": "cd client && npx vite build",
     "build": "tsc",
     "test": "bun test",
     "test:watch": "bun test --watch"

@@ -3,7 +3,8 @@ import fs from 'fs-extra';
 import path from 'path';
 import * as config from '../config';
 import { queryOne, execute } from '../lib/database';
-import logger from '../lib/logger';
+import { createLogger } from '../lib/logger';
+const logger = createLogger('Judge');
 
 export async function runJudge(submissionId: number, pluginManager: any): Promise<void> {
     try {

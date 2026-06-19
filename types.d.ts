@@ -31,6 +31,7 @@ export interface Logger {
     info: (message: string) => void;
     warn: (message: string) => void;
     error: (message: string, error?: Error) => void;
+    dev: (message: string) => void;
 }
 
 export interface OJContext {

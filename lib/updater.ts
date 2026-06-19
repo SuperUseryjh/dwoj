@@ -3,7 +3,8 @@ import path from 'path';
 import axios from 'axios';
 import * as tar from 'tar';
 import * as config from '../config';
-import logger from './logger';
+import { createLogger } from './logger';
+const logger = createLogger('Updater');
 
 class Updater {
     appRoot: string;

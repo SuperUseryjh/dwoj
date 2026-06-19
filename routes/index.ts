@@ -1,6 +1,7 @@
 import { Router } from '../lib/bun-http';
 import { Problem, query } from '../lib/database';
-import logger from '../lib/logger';
+import { createLogger } from '../lib/logger';
+const logger = createLogger('Route');
 
 const router = new Router();
 
@@ -11,6 +12,11 @@ import adminRoutes from './admin';
 import discussRoutes from './discuss';
 
 export default (pluginManager: any): Router => {
+    // 测试热重载端点
+    router.get('/health', (req, res, next) => {
+        res.json({ status: 'ok', time: new Date().toISOString() });
+    });
+
     router.get('/', (req, res, next) => {
         try {
             const problems = query<Problem>("SELECT id, title FROM problems");

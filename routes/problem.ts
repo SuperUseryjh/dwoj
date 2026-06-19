@@ -5,7 +5,8 @@ import path from 'path';
 import * as config from '../config';
 import { requireLogin, requireRole, ROLE_LV } from '../middleware/auth';
 import { Problem, Submission, User, query, queryOne, execute } from '../lib/database';
-import logger from '../lib/logger';
+import { createLogger } from '../lib/logger';
+const logger = createLogger('Problem');
 
 const router = new Router();
 const upload = new UploadHandler({ dest: config.UPLOAD_DIR });

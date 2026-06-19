@@ -1,0 +1,213 @@
+/* ============================================================
+   DWOJ 主样式表
+   ============================================================ */
+
+/* --- 基础 Markdown / KaTeX 样式（从 EJS 模板中提取） --- */
+pre code {
+  background-color: #f8f9fa;
+  padding: 0.2rem 0.4rem;
+  border-radius: 4px;
+}
+
+pre.bg-dark code {
+  background-color: transparent;
+  color: inherit;
+}
+
+blockquote {
+  border-left: 4px solid #ccc;
+  padding-left: 1rem;
+  color: #666;
+}
+
+.katex {
+  font-size: 1.1em;
+}
+
+/* --- 导航栏增强 --- */
+.navbar-brand {
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+
+/* --- 表格上方标题行（首页题目列表等） --- */
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+}
+
+/* --- 题目内容区域 --- */
+.markdown-body {
+  line-height: 1.8;
+  font-size: 1rem;
+}
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4 {
+  margin-top: 1.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.markdown-body p {
+  margin-bottom: 1rem;
+}
+
+.markdown-body ul,
+.markdown-body ol {
+  padding-left: 1.5rem;
+  margin-bottom: 1rem;
+}
+
+.markdown-body img {
+  max-width: 100%;
+}
+
+/* --- 代码编辑区 --- */
+.code-textarea {
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  tab-size: 4;
+}
+
+/* --- 提交状态页 --- */
+.status-badge {
+  min-width: 80px;
+  display: inline-block;
+}
+
+/* --- 测试点网格 --- */
+.testcase-grid .testcase-item {
+  min-height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+/* --- Toast 通知 --- */
+.toast-container {
+  position: fixed;
+  top: 1rem;
+  right: 1rem;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.toast-notification {
+  min-width: 280px;
+  max-width: 420px;
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  color: #fff;
+  font-size: 0.9rem;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  animation: toast-in 0.3s ease-out;
+  cursor: pointer;
+  transition: opacity 0.3s, transform 0.3s;
+}
+
+.toast-notification.toast-hide {
+  opacity: 0;
+  transform: translateX(100%);
+}
+
+.toast-notification.toast-success {
+  background-color: #198754;
+}
+
+.toast-notification.toast-error {
+  background-color: #dc3545;
+}
+
+.toast-notification.toast-info {
+  background-color: #0d6efd;
+}
+
+.toast-notification.toast-warning {
+  background-color: #ffc107;
+  color: #000;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* --- Loading 覆盖层 --- */
+.btn-loading {
+  position: relative;
+  pointer-events: none;
+  opacity: 0.8;
+}
+
+.btn-loading::after {
+  content: '';
+  display: inline-block;
+  width: 1rem;
+  height: 1rem;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+  margin-left: 0.5rem;
+  vertical-align: middle;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* --- Sticky 侧边栏保持间距 --- */
+.sticky-sidebar {
+  position: sticky;
+  top: 20px;
+}
+
+/* --- 空状态 --- */
+.empty-state {
+  padding: 3rem 1rem;
+  text-align: center;
+  color: #6c757d;
+}
+
+/* --- 讨论区列表 --- */
+.thread-card {
+  transition: background-color 0.15s;
+}
+
+.thread-card:hover {
+  background-color: rgba(13, 110, 253, 0.04);
+}
+
+/* --- 管理面板表格 --- */
+.table-actions form {
+  display: inline;
+}
+
+/* --- 响应式微调 --- */
+@media (max-width: 768px) {
+  .sticky-sidebar {
+    position: static;
+  }
+
+  .testcase-grid .col-2 {
+    width: 33.33%;
+  }
+}
