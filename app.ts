@@ -3,9 +3,11 @@ import path from 'path';
 
 import * as config from './config';
 import { initDb } from './lib/database';
-import logger from './lib/logger';
+import { createLogger } from './lib/logger';
 import { App } from './lib/bun-http';
 import PluginSystem from './lib/plugin_system';
+
+const logger = createLogger('App');
 import Updater from './lib/updater';
 import globalMiddleware from './middleware/global';
 import createRoutes from './routes/index';
@@ -42,7 +44,9 @@ app.use(createRoutes(pluginManager));
 
 // 启动服务器
 app.listen(config.PORT, async () => {
-    logger.info(`DWOJ 3.0 running on port ${config.PORT} (Bun + TypeScript)`);
+    logger.info("--------------------");
+    logger.info("DWOJ 3.2 is running on port " + config.PORT);
+    logger.info("--------------------");
 
     // 检查并应用更新
     const updater = new Updater(appRoot);

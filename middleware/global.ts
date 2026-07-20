@@ -1,7 +1,8 @@
 import MarkdownIt from 'markdown-it';
 import jwt from 'jsonwebtoken';
 import { queryOne } from '../lib/database';
-import logger from '../lib/logger';
+import { createLogger } from '../lib/logger';
+const logger = createLogger('Global');
 import * as config from '../config';
 import { ROLE_LV } from './auth';
 

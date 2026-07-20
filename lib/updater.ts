@@ -3,7 +3,8 @@ import path from 'path';
 import axios from 'axios';
 import * as tar from 'tar';
 import * as config from '../config';
-import logger from './logger';
+import { createLogger } from './logger';
+const logger = createLogger('Updater');
 
 class Updater {
     appRoot: string;
@@ -21,36 +22,36 @@ class Updater {
     }
 
     async checkAndApplyUpdate(): Promise<boolean> {
-        logger.info('[Updater] Checking for updates...');
+        logger.info('Checking for updates...');
         try {
             const response = await axios.get(this.updateCheckUrl);
             const remoteVersionInfo = response.data;
 
             if (!remoteVersionInfo || !remoteVersionInfo.version) {
-                logger.warn('[Updater] Invalid remote version information received.');
+                logger.warn('Invalid remote version information received.');
                 return false;
             }
 
             const remoteVersion = remoteVersionInfo.version;
-            logger.info(`[Updater] Current version: ${this.currentVersion}, Remote version: ${remoteVersion}`);
+            logger.info(`Current version: ${this.currentVersion}, Remote version: ${remoteVersion}`);
 
             if (remoteVersion !== this.currentVersion) {
-                logger.info(`[Updater] New version ${remoteVersion} available. Starting update...`);
+                logger.info(`New version ${remoteVersion} available. Starting update...`);
                 await this.downloadAndExtractUpdate(remoteVersion);
-                logger.info('[Updater] Update applied. Please restart the application to complete the update.');
+                logger.info('Update applied. Please restart the application to complete the update.');
                 return true;
             } else {
-                logger.info('[Updater] No new updates available.');
+                logger.info('No new updates available.');
                 return false;
             }
         } catch (error) {
-            logger.error('[Updater] Error checking for updates:', error as Error);
+            logger.error('Error checking for updates:', error as Error);
             return false;
         }
     }
 
     async downloadAndExtractUpdate(version: string): Promise<void> {
-        logger.info(`[Updater] Downloading update package from ${this.updatePackageUrl}`);
+        logger.info(`Downloading update package from ${this.updatePackageUrl}`);
         const tempPackagePath = path.join(this.tempDir, `dwoj-${version}.tar.gz`);
 
         await fs.ensureDir(this.tempDir);
@@ -68,9 +69,9 @@ class Updater {
             writer.on('finish', resolve);
             writer.on('error', reject);
         });
-        logger.info('[Updater] Update package downloaded.');
+        logger.info('Update package downloaded.');
 
-        logger.info('[Updater] Extracting update package...');
+        logger.info('Extracting update package...');
         const extractDir = path.join(this.tempDir, 'extracted');
         await fs.ensureDir(extractDir);
 
@@ -78,9 +79,9 @@ class Updater {
             file: tempPackagePath,
             cwd: extractDir
         });
-        logger.info('[Updater] Update package extracted.');
+        logger.info('Update package extracted.');
 
-        logger.info('[Updater] Applying update...');
+        logger.info('Applying update...');
         let extractedContentPath = extractDir;
         const filesInExtractDir = await fs.readdir(extractDir);
         if (filesInExtractDir.length === 1 && await fs.stat(path.join(extractDir, filesInExtractDir[0])).then(s => s.isDirectory())) {
@@ -88,10 +89,10 @@ class Updater {
         }
 
         await fs.copy(extractedContentPath, this.appRoot, { overwrite: true });
-        logger.info('[Updater] Update applied successfully. Cleaning up temporary files...');
+        logger.info('Update applied successfully. Cleaning up temporary files...');
 
         await fs.remove(this.tempDir);
-        logger.info('[Updater] Temporary files cleaned up.');
+        logger.info('Temporary files cleaned up.');
     }
 }
 

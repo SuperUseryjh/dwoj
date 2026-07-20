@@ -1,7 +1,8 @@
 import fs from 'fs-extra';
 import path from 'path';
 import crypto from 'crypto';
-import logger from './logger';
+import { createLogger } from './logger';
+const logger = createLogger('Plugin');
 import { queryOne, execute } from './database';
 
 // New Plugin class
@@ -32,7 +33,7 @@ class Plugin {
     _checkPermission(resource: string, action: string, permissionToCheck?: string): void {
         const actualPermission = permissionToCheck || `${resource}_${action}`;
         if (!this.permissions.has(actualPermission)) {
-            this.oj.logger.warn(`[Plugin] Plugin with token ${this.token} attempted unauthorized action: ${actualPermission}`);
+            this.oj.logger.warn(`Plugin with token ${this.token} attempted unauthorized action: ${actualPermission}`);
             throw new Error(`Unauthorized action: ${actualPermission}`);
         }
     }
@@ -127,7 +128,7 @@ class PluginSystem {
                 let token = dbConfig ? dbConfig.token : crypto.randomBytes(16).toString('hex');
                 let grantedPermissions = dbConfig && dbConfig.permissions ? JSON.parse(dbConfig.permissions) : requestedPermissions;
 
-                this.oj.logger.info(`[PluginSystem] Loading ${file}: dbConfig = ${JSON.stringify(dbConfig)}, grantedPermissions = ${JSON.stringify(grantedPermissions)}`);
+                this.oj.logger.info(`Loading ${file}: dbConfig = ${JSON.stringify(dbConfig)}, grantedPermissions = ${JSON.stringify(grantedPermissions)}`);
 
                 if (!dbConfig || !dbConfig.token) {
                     execute("INSERT OR REPLACE INTO plugin_configs (filename, enabled, token, permissions) VALUES (?, ?, ?, ?)",
@@ -152,12 +153,12 @@ class PluginSystem {
                 }
 
                 if (isEnabled && typeof pluginModule.onRoute === 'function') {
-                    logger.info(`[Plugin] Hot-registering routes for ${file}`);
+                    logger.info(`Hot-registering routes for ${file}`);
                     wrappedPlugin.executeHook('onRoute', this.app);
                 }
 
             } catch (e) {
-                logger.error(`[Plugin] Failed to load ${file}:`, e as Error);
+                logger.error(`Failed to load ${file}:`, e as Error);
             }
         }
 
@@ -172,7 +173,7 @@ class PluginSystem {
             // eslint-disable-next-line @typescript-eslint/no-require-imports
             registry['db-monitor'] = require('./builtin_plugins/db-monitor');
         } catch (e) {
-            logger.error('[PluginSystem] Failed to load builtin plugin db-monitor:', e as Error);
+            logger.error('Failed to load builtin plugin db-monitor:', e as Error);
         }
         return registry;
     }
@@ -207,7 +208,7 @@ class PluginSystem {
                 }
                 this.pluginExports[manifest.name || name] = wrappedPlugin.exports;
                 if (typeof pluginModule.onRoute === 'function') {
-                    logger.info(`[Plugin] Hot-registering routes for builtin:${name}`);
+                    logger.info(`Hot-registering routes for builtin:${name}`);
                     wrappedPlugin.executeHook('onRoute', this.app);
                 }
             }
@@ -226,7 +227,7 @@ class PluginSystem {
                     const res = p.module.executeHook(hookName, ...args);
                     if (res) results.push(res);
                 } catch (e) {
-                    logger.error(`[Plugin Error] [${p.name || p.filename}] [${hookName}]:`, e as Error);
+                    logger.error(`[${p.name || p.filename}] [${hookName}]:`, e as Error);
                 }
             }
         });
@@ -271,7 +272,7 @@ class PluginSystem {
 
     async delete(filename: string): Promise<void> {
         if (filename.startsWith('builtin:')) {
-            logger.warn(`[PluginSystem] Cannot delete builtin plugin: ${filename}`);
+            logger.warn(`Cannot delete builtin plugin: ${filename}`);
             return;
         }
         const p = path.join(this.pluginDir, filename);

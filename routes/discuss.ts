@@ -1,7 +1,8 @@
 import { Router } from '../lib/bun-http';
 import { requireLogin, requireRole } from '../middleware/auth';
 import { DiscussNode, Thread, query, queryOne, execute } from '../lib/database';
-import logger from '../lib/logger';
+import { createLogger } from '../lib/logger';
+const logger = createLogger('Discuss');
 
 const router = new Router();
 

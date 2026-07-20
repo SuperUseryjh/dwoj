@@ -22,35 +22,68 @@ const logFileName: string = getLogFileName();
 const logFilePath: string = path.join(logDir, logFileName);
 const logStream: fs.WriteStream = fs.createWriteStream(logFilePath, { flags: 'a' });
 
+const isDev = process.argv.includes('--dev');
+
+function padModuleName(name: string): string {
+    const maxLen = 8;
+    if (name.length > maxLen) {
+        return name.slice(0, maxLen);
+    }
+    const totalPad = maxLen - name.length;
+    const leftPad = Math.floor(totalPad / 2);
+    const rightPad = totalPad - leftPad;
+    return ' '.repeat(leftPad) + name + ' '.repeat(rightPad);
+}
+
+function getTimeString(): string {
+    const now = new Date();
+    return `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
+}
+
 export interface Logger {
     info: (message: string) => void;
     warn: (message: string) => void;
     error: (message: string, error?: Error) => void;
+    debug: (message: string) => void;
 }
 
-const logger: Logger = {
-    info: (message: string) => {
-        const timestamp = new Date().toISOString();
-        const logMessage = `[INFO] ${timestamp}: ${message}\n`;
-        console.log(logMessage.trim());
+export function createLogger(moduleName: string): Logger {
+    const paddedName = padModuleName(moduleName);
+
+    const log = (level: string, message: string, error?: Error) => {
+        const time = new Date().toISOString();
+        const logMessage = `[${level}][${paddedName}]${time} ${message}\n`;
+
+        switch (level) {
+            case 'INFO':
+                console.log(logMessage.trim());
+                break;
+            case 'WARN':
+                console.warn(logMessage.trim());
+                break;
+            case 'ERRO':
+                console.error(logMessage.trim());
+                break;
+            case 'DEBG':
+                if (!isDev) return;
+                console.log(logMessage.trim());
+                break;
+        }
         logStream.write(logMessage);
-    },
-    warn: (message: string) => {
-        const timestamp = new Date().toISOString();
-        const logMessage = `[WARN] ${timestamp}: ${message}\n`;
-        console.warn(logMessage.trim());
-        logStream.write(logMessage);
-    },
-    error: (message: string, error?: Error) => {
-        const timestamp = new Date().toISOString();
-        const errorMessage = `[ERROR] ${timestamp}: ${message}\n`;
-        console.error(errorMessage.trim());
-        logStream.write(errorMessage);
         if (error?.stack) {
             logStream.write(error.stack + '\n');
         }
-    }
-};
+    };
+
+    return {
+        info: (message: string) => log('INFO', message),
+        warn: (message: string) => log('WARN', message),
+        error: (message: string, error?: Error) => log('ERRO', message, error),
+        debug: (message: string) => log('DEBG', message),
+    };
+}
+
+const logger = createLogger('App');
 
 process.on('exit', () => {
     logStream.end();

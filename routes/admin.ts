@@ -4,7 +4,8 @@ import fs from 'fs-extra';
 import * as config from '../config';
 import { requireRole } from '../middleware/auth';
 import { User, Role, query, queryOne, execute } from '../lib/database';
-import logger from '../lib/logger';
+import { createLogger } from '../lib/logger';
+const logger = createLogger('Admin');
 
 const router = new Router();
 const upload = new UploadHandler({ dest: config.UPLOAD_DIR });
