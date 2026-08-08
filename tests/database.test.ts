@@ -26,6 +26,18 @@ describe('database', () => {
         expect(users[0].role).toBe('root');
     });
 
+    test('initializes judge settings and submission error storage', () => {
+        initDb();
+        const settings = queryOne<{ judgeToken: string; maxConcurrency: number }>(
+            'SELECT judgeToken, maxConcurrency FROM judge_settings WHERE id = 1'
+        );
+        expect(settings).toBeDefined();
+        expect(settings!.maxConcurrency).toBe(1);
+
+        const columns = query<{ name: string }>('PRAGMA table_info(submissions)');
+        expect(columns.map(column => column.name)).toContain('errorInfo');
+    });
+
     test('initDb skips default data if already exists', () => {
         expect(() => initDb()).not.toThrow();
     });

@@ -3,7 +3,7 @@ import path from 'path';
 import fs from 'fs-extra';
 import * as config from '../config';
 import { requireRole } from '../middleware/auth';
-import { User, Role, query, queryOne, execute } from '../lib/database';
+import { JudgeSettings, User, Role, query, queryOne, execute } from '../lib/database';
 import logger from '../lib/logger';
 
 const router = new Router();
@@ -23,10 +23,27 @@ export default (pluginManager: any): Router => {
                 }
             });
             const roles = query<Role>("SELECT name FROM roles");
-            res.render('admin', { users, roles: roles.map(r => r.name) });
+            const judgeSettings = queryOne<JudgeSettings>('SELECT judgeToken, maxConcurrency FROM judge_settings WHERE id = 1');
+            res.render('admin', { users, roles: roles.map(r => r.name), judgeSettings });
         } catch (err) {
             logger.error('Error fetching data for admin page', err as Error);
             res.status(500).send('服务器错误');
+        }
+    });
+
+    router.post('/admin/judge-settings', requireRole('super_user'), (req, res, next) => {
+        const { maxConcurrency } = req.body;
+        const concurrency = Number.parseInt(maxConcurrency, 10);
+        if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 32) {
+            res.status(400).send('Invalid judge configuration');
+            return;
+        }
+        try {
+            execute('UPDATE judge_settings SET maxConcurrency = ? WHERE id = 1', [concurrency]);
+            res.redirect('/admin');
+        } catch (err) {
+            logger.error('Error updating judge settings', err as Error);
+            res.status(500).send('Server error');
         }
     });
 

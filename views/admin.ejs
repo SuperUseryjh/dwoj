@@ -32,6 +32,17 @@
         </table>
     </div>
     <div class="col-md-4">
+        <div class="card mt-3 mb-3">
+            <div class="card-header">Judge Configuration</div>
+            <div class="card-body">
+                <form action="/admin/judge-settings" method="POST">
+                    <p class="small text-muted">Judge endpoint: http://judge:8080</p>
+                    <label class="form-label" for="maxConcurrency">Maximum concurrent jobs</label>
+                    <input id="maxConcurrency" type="number" name="maxConcurrency" class="form-control mb-2" min="1" max="32" required value="<%= judgeSettings ? judgeSettings.maxConcurrency : 1 %>">
+                    <button class="btn btn-primary w-100">Save judge settings</button>
+                </form>
+            </div>
+        </div>
         <div class="card mt-3">
             <div class="card-header bg-warning">高级设置</div>
             <div class="card-body">

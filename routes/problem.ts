@@ -5,6 +5,7 @@ import path from 'path';
 import * as config from '../config';
 import { requireLogin, requireRole, ROLE_LV } from '../middleware/auth';
 import { Problem, Submission, User, query, queryOne, execute } from '../lib/database';
+import { runJudge } from '../controllers/judge';
 import logger from '../lib/logger';
 
 const router = new Router();
@@ -95,8 +96,17 @@ router.post('/submit', requireLogin, (req, res, next) => {
     const { problemId, language, code } = req.body;
     const submissionTime = new Date().toLocaleString();
     try {
+        if (language !== 'cpp') {
+            res.status(400).send('Only C++ submissions are supported');
+            return;
+        }
+        if (!queryOne<Problem>('SELECT id FROM problems WHERE id = ?', [problemId])) {
+            res.status(404).send('Problem not found');
+            return;
+        }
         const result = execute(`INSERT INTO submissions (problemId, userId, username, language, code, status, time, caseResults) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
             [problemId, req.user.id, req.user.username, language, code, "Pending", submissionTime, JSON.stringify([])]);
+        void runJudge(Number(result.lastInsertRowid), req.app.get('pluginManager'));
         res.redirect('/status');
     } catch (err) {
         logger.error('Error inserting new submission', err as Error);

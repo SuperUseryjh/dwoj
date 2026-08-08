@@ -71,6 +71,11 @@ export interface PluginConfig {
     permissions: string | null;
 }
 
+export interface JudgeSettings {
+    judgeToken: string;
+    maxConcurrency: number;
+}
+
 export const initDb = (): void => {
     db.run(`CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -99,8 +104,20 @@ export const initDb = (): void => {
         code TEXT,
         status TEXT,
         time TEXT,
-        caseResults TEXT
+        caseResults TEXT,
+        errorInfo TEXT
     )`);
+
+    db.run(`CREATE TABLE IF NOT EXISTS judge_settings (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        judgeToken TEXT NOT NULL,
+        maxConcurrency INTEGER NOT NULL DEFAULT 1
+    )`);
+
+    const submissionColumns = db.query('PRAGMA table_info(submissions)').all() as { name: string }[];
+    if (!submissionColumns.some(column => column.name === 'errorInfo')) {
+        db.run('ALTER TABLE submissions ADD COLUMN errorInfo TEXT');
+    }
 
     db.run(`CREATE TABLE IF NOT EXISTS discussNodes (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -147,6 +164,12 @@ export const initDb = (): void => {
     if (!roleCount || roleCount.count === 0) {
         db.run(`INSERT INTO roles (name) VALUES ('default'), ('super_user'), ('root')`);
         logger.info('Initial roles inserted.');
+    }
+
+    const judgeSettings = db.query('SELECT id FROM judge_settings WHERE id = 1').get();
+    if (!judgeSettings) {
+        db.run('INSERT INTO judge_settings (id, judgeToken, maxConcurrency) VALUES (1, ?, ?)',
+            [process.env.JUDGE_TOKEN || '', 1]);
     }
 
     logger.info('Database tables checked/created.');

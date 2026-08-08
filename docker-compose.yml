@@ -1,0 +1,54 @@
+services:
+  app:
+    build: .
+    ports:
+      - "${DWOJ_PORT:-3000}:3000"
+    environment:
+      PORT: 3000
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
+      JUDGE_URL: http://judge:8080
+      JUDGE_TOKEN: ${JUDGE_TOKEN:?Set JUDGE_TOKEN in .env}
+    volumes:
+      - dwoj-data:/app/data
+      - dwoj-problems:/app/problems_data
+      - dwoj-uploads:/app/uploads
+      - dwoj-plugins:/app/plugins
+    depends_on:
+      judge:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - judge_net
+
+  judge:
+    build: ./judge
+    environment:
+      JUDGE_TOKEN: ${JUDGE_TOKEN:?Set JUDGE_TOKEN in .env}
+      JUDGE_MAX_CONCURRENCY: ${JUDGE_MAX_CONCURRENCY:-1}
+    expose:
+      - "8080"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+    networks:
+      - judge_net
+
+volumes:
+  dwoj-data:
+  dwoj-problems:
+  dwoj-uploads:
+  dwoj-plugins:
+
+networks:
+  judge_net:
+    internal: true

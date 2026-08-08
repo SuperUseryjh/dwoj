@@ -6,6 +6,7 @@ export const PROB_DIR: string = path.join(__dirname, '..', 'problems_data');
 export const UPLOAD_DIR: string = path.join(__dirname, '..', 'uploads');
 export const PLUGINS_DIR: string = path.join(__dirname, '..', 'plugins');
 export const JWT_SECRET: string = process.env.JWT_SECRET || 'your_jwt_secret_key';
+export const JUDGE_URL: string = process.env.JUDGE_URL || 'http://judge:8080';
 
 export const UPDATE_CHECK_URL: string = 'http://static.mr-onion-blog.fun/deploy/dwoj/dwoj.json';
 export const UPDATE_PACKAGE_URL: string = 'http://static.mr-onion-blog.fun/deploy/dwoj/dwoj.tar.gz';
