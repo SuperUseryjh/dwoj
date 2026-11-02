@@ -1,29 +1,52 @@
 <%- include('partials/header') %>
 <h3>评测 #<%= sub.id %> 详情</h3>
 <div class="alert alert-secondary">
-    题目: <%= sub.problemId %> | 用户: <%= sub.username %> | 状态: <strong><%= sub.status %></strong>
+    题目:
+    <a href="/problem/<%= sub.problemId %>" class="text-decoration-none">P<%= sub.problemId %></a>
+    | 用户: <%= sub.username %>
+    | 语言: <%= sub.language %>
+    | 提交时间: <%= sub.time %>
+    | 状态: <strong><%= sub.status %></strong>
 </div>
 
-<h4>代码</h4>
-<pre class="bg-dark text-white p-3 rounded"><code><%= sub.code %></code></pre>
+<% if (user && (ROLE_LV[user.role] || 0) >= 1) { %>
+    <form action="/submission/<%= sub.id %>/rejudge" method="POST" class="mb-3"
+          onsubmit="return confirm('确认重新评测这次提交？');">
+        <button type="submit" class="btn btn-sm btn-outline-warning">重新评测</button>
+    </form>
+<% } %>
 
-<% if(sub.errorInfo) { %>
+<% if (sub.errorInfo) { %>
     <div class="alert alert-danger">
-        <strong>Erro Info:</strong>
-        <pre><%= sub.errorInfo %></pre>
+        <strong>错误信息:</strong>
+        <pre class="mb-0 mt-2"><%= sub.errorInfo %></pre>
     </div>
 <% } %>
 
-<% if(sub.caseResults && sub.caseResults.length > 0) { %>
+<% if (sub.caseResults && sub.caseResults.length > 0) { %>
     <h4>测试点详情</h4>
     <div class="row">
-        <% sub.caseResults.forEach(c => { %>
-            <div class="col-2 mb-2">
-                <div class="p-2 text-center text-white <%= c.status==='AC'?'bg-success':'bg-danger' %> rounded">
-                    <%= c.name %>: <%= c.status %>
+        <% sub.caseResults.forEach(function (c) { %>
+            <%
+                const caseBadge = {
+                    'AC': 'bg-success',
+                    'WA': 'bg-danger',
+                    'TLE': 'bg-warning text-dark',
+                    'RE': 'bg-danger',
+                    'OLE': 'bg-warning text-dark',
+                    'CE': 'bg-secondary',
+                    'SE': 'bg-dark',
+                };
+            %>
+            <div class="col-3 mb-2">
+                <div class="p-2 text-center text-white <%= caseBadge[c.status] || 'bg-secondary' %> rounded">
+                    #<%= c.name %>: <%= c.status %><% if (c.time !== undefined) { %> <small>(<%= c.time %> ms)</small><% } %>
                 </div>
             </div>
-        <% }) %>
+        <% }); %>
     </div>
 <% } %>
+
+<h4 class="mt-4">代码</h4>
+<pre class="bg-dark text-white p-3 rounded"><code><%= sub.code %></code></pre>
 <%- include('partials/footer') %>

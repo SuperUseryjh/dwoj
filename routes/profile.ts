@@ -9,7 +9,7 @@ router.get('/profile', requireLogin, (req, res, next) => {
     res.render('profile');
 });
 
-router.post('/profile', requireLogin, (req, res, next) => {
+router.post('/profile', requireLogin, async (req, res, next) => {
     const { password, bio } = req.body;
     const updateFields: string[] = [];
     const updateValues: any[] = [];
@@ -31,7 +31,7 @@ router.post('/profile', requireLogin, (req, res, next) => {
     updateValues.push(req.user.id);
 
     try {
-        execute(`UPDATE users SET ${updateFields.join(', ')} WHERE id = ?`, updateValues);
+        await execute(`UPDATE users SET ${updateFields.join(', ')} WHERE id = ?`, updateValues);
         res.redirect('/profile');
     } catch (err) {
         logger.error('Error updating user profile', err as Error);

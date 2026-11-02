@@ -38,9 +38,16 @@
                         
                         <div class="mb-3">
                             <label class="form-label">语言</label>
+                            <%
+                                const langOptions = (typeof languages !== 'undefined' && languages.length > 0)
+                                    ? languages
+                                    : ['python', 'node'];
+                                const langLabels = { python: 'Python 3', node: 'Node.js (Bun)' };
+                            %>
                             <select name="language" class="form-select">
-                                <option value="python">Python 3</option>
-                                <option value="node">Node.js</option>
+                                <% langOptions.forEach(function (lang) { %>
+                                    <option value="<%= lang %>"><%= langLabels[lang] || lang %></option>
+                                <% }); %>
                             </select>
                         </div>
 

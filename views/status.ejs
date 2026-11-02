@@ -37,16 +37,22 @@
                                 <span class="badge bg-light text-dark border"><%= s.language %></span>
                             </td>
                             <td>
-                                <% if (s.status === 'Accepted') { %>
-                                    <span class="badge bg-success rounded-pill">Available</span> <!-- 这里用Bootstrap内置样式模拟AC绿 -->
-                                    <span class="fw-bold text-success">Accepted</span>
-                                <% } else if (s.status === 'Pending' || s.status === 'Running') { %>
+                                <%
+                                    const badgeMap = {
+                                        'Accepted': 'bg-success',
+                                        'Wrong Answer': 'bg-danger',
+                                        'Time Limit Exceeded': 'bg-warning text-dark',
+                                        'Runtime Error': 'bg-danger',
+                                        'Output Limit Exceeded': 'bg-warning text-dark',
+                                        'Compile Error': 'bg-secondary',
+                                        'System Error': 'bg-dark',
+                                    };
+                                %>
+                                <% if (s.status === 'Pending' || s.status === 'Running') { %>
                                     <div class="spinner-border spinner-border-sm text-primary" role="status"></div>
                                     <span class="text-primary"><%= s.status %></span>
-                                <% } else if (s.status.includes('Wrong')) { %>
-                                    <span class="fw-bold text-danger">Wrong Answer</span>
                                 <% } else { %>
-                                    <span class="fw-bold text-warning text-dark"><%= s.status %></span>
+                                    <span class="badge <%= badgeMap[s.status] || 'bg-secondary' %>"><%= s.status %></span>
                                 <% } %>
                             </td>
                             <td class="text-muted small"><%= s.time %></td>
@@ -66,11 +72,29 @@
     </div>
 </div>
 
-<!-- 自动刷新脚本，体验更好 -->
+<% if (totalPages > 1) { %>
+    <nav class="mt-3">
+        <ul class="pagination justify-content-center">
+            <li class="page-item <%= page <= 1 ? 'disabled' : '' %>">
+                <a class="page-link" href="/status?page=<%= page - 1 %>">上一页</a>
+            </li>
+            <li class="page-item disabled">
+                <span class="page-link"><%= page %> / <%= totalPages %>（共 <%= total %> 条）</span>
+            </li>
+            <li class="page-item <%= page >= totalPages ? 'disabled' : '' %>">
+                <a class="page-link" href="/status?page=<%= page + 1 %>">下一页</a>
+            </li>
+        </ul>
+    </nav>
+<% } %>
+
+<!-- 存在未完成的提交时才自动刷新，避免无意义的整页刷新 -->
+<% if ((submissions || []).some(s => s.status === 'Pending' || s.status === 'Running')) { %>
 <script>
-    setTimeout(() => {
+    setTimeout(function () {
         window.location.reload();
-    }, 5000); // 每5秒刷新一次
+    }, 3000);
 </script>
+<% } %>
 
 <%- include('partials/footer') %>

@@ -10,10 +10,10 @@ router.get('/login', (req, res, next) => {
     res.render('login');
 });
 
-router.post('/login', (req, res, next) => {
+router.post('/login', async (req, res, next) => {
     const { username, password } = req.body;
     try {
-        const user = queryOne<User>("SELECT id, username, password, role, isBanned FROM users WHERE username = ? AND password = ?", [username, password]);
+        const user = await queryOne<User>("SELECT id, username, password, role, isBanned FROM users WHERE username = ? AND password = ?", [username, password]);
         if (user) {
             if (user.isBanned) {
                 res.send('账号已被封禁');
@@ -42,19 +42,19 @@ router.get('/register', (req, res, next) => {
     res.render('register');
 });
 
-router.post('/register', (req, res, next) => {
+router.post('/register', async (req, res, next) => {
     if (req.cookies['device_banned']) {
         res.status(403).send('Banned');
         return;
     }
     const { username, password } = req.body;
     try {
-        const user = queryOne<User>("SELECT id FROM users WHERE username = ?", [username]);
+        const user = await queryOne<User>("SELECT id FROM users WHERE username = ?", [username]);
         if (user) {
             res.send('用户名已存在');
             return;
         }
-        execute(`INSERT INTO users (username, password, role, bio, tags, isBanned) VALUES (?, ?, ?, ?, ?, ?)`,
+        await execute(`INSERT INTO users (username, password, role, bio, tags, isBanned) VALUES (?, ?, ?, ?, ?, ?)`,
             [username, password, 'default', 'New user', JSON.stringify([]), 0]);
         res.redirect('/login');
     } catch (err) {

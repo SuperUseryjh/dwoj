@@ -1,14 +1,14 @@
 import { Router } from '../lib/bun-http';
 import { requireLogin, requireRole } from '../middleware/auth';
-import { DiscussNode, Thread, query, queryOne, execute } from '../lib/database';
+import { DiscussNode, query, queryOne, execute } from '../lib/database';
 import logger from '../lib/logger';
 
 const router = new Router();
 
-router.get('/discuss', (req, res, next) => {
+router.get('/discuss', async (req, res, next) => {
     try {
-        const nodes = query<DiscussNode>("SELECT * FROM discussNodes");
-        const threads = query<any>("SELECT * FROM threads ORDER BY id DESC");
+        const nodes = await query<DiscussNode>("SELECT * FROM discussNodes");
+        const threads = await query<any>("SELECT * FROM threads ORDER BY id DESC");
         threads.forEach(thread => {
             if (thread.replies) {
                 try {
@@ -25,9 +25,9 @@ router.get('/discuss', (req, res, next) => {
     }
 });
 
-router.get('/discuss/new', requireLogin, (req, res, next) => {
+router.get('/discuss/new', requireLogin, async (req, res, next) => {
     try {
-        const nodes = query<DiscussNode>("SELECT * FROM discussNodes");
+        const nodes = await query<DiscussNode>("SELECT * FROM discussNodes");
         res.render('thread_edit', { nodes });
     } catch (err) {
         logger.error('Error fetching discuss nodes for new thread page', err as Error);
@@ -35,11 +35,11 @@ router.get('/discuss/new', requireLogin, (req, res, next) => {
     }
 });
 
-router.post('/discuss/create', requireLogin, (req, res, next) => {
+router.post('/discuss/create', requireLogin, async (req, res, next) => {
     const { nodeId, title, content } = req.body;
     const threadTime = new Date().toLocaleString();
     try {
-        const result = execute(`INSERT INTO threads (nodeId, title, content, author, time, replies) VALUES (?, ?, ?, ?, ?, ?)`,
+        const result = await execute(`INSERT INTO threads (nodeId, title, content, author, time, replies) VALUES (?, ?, ?, ?, ?, ?)`,
             [nodeId, title, content, req.user.username, threadTime, JSON.stringify([])]);
         res.redirect('/discuss/thread/' + Number(result.lastInsertRowid));
     } catch (err) {
@@ -48,9 +48,9 @@ router.post('/discuss/create', requireLogin, (req, res, next) => {
     }
 });
 
-router.get('/discuss/thread/:id', (req, res, next) => {
+router.get('/discuss/thread/:id', async (req, res, next) => {
     try {
-        const thread = queryOne<any>("SELECT * FROM threads WHERE id = ?", [req.params.id]);
+        const thread = await queryOne<any>("SELECT * FROM threads WHERE id = ?", [req.params.id]);
         if (!thread) {
             res.status(404).send('帖子不存在');
             return;
@@ -69,17 +69,17 @@ router.get('/discuss/thread/:id', (req, res, next) => {
     }
 });
 
-router.post('/discuss/reply', requireLogin, (req, res, next) => {
+router.post('/discuss/reply', requireLogin, async (req, res, next) => {
     const { threadId, content } = req.body;
     try {
-        const thread = queryOne<{ replies: string | null }>("SELECT replies FROM threads WHERE id = ?", [threadId]);
+        const thread = await queryOne<{ replies: string | null }>("SELECT replies FROM threads WHERE id = ?", [threadId]);
         if (!thread) {
             res.status(404).send('帖子不存在');
             return;
         }
         const replies: any[] = thread.replies ? JSON.parse(thread.replies) : [];
         replies.push({ author: req.user.username, content, time: new Date().toLocaleString() });
-        execute("UPDATE threads SET replies = ? WHERE id = ?", [JSON.stringify(replies), threadId]);
+        await execute("UPDATE threads SET replies = ? WHERE id = ?", [JSON.stringify(replies), threadId]);
         res.redirect('/discuss/thread/' + threadId);
     } catch (err) {
         logger.error(`Error adding reply to thread ${threadId}`, err as Error);
@@ -87,10 +87,10 @@ router.post('/discuss/reply', requireLogin, (req, res, next) => {
     }
 });
 
-router.post('/discuss/node', requireRole('super_user'), (req, res, next) => {
+router.post('/discuss/node', requireRole('super_user'), async (req, res, next) => {
     const { name, desc } = req.body;
     try {
-        execute(`INSERT INTO discussNodes (name, desc) VALUES (?, ?)`, [name, desc]);
+        await execute(`INSERT INTO discussNodes (name, desc) VALUES (?, ?)`, [name, desc]);
         res.redirect('/discuss');
     } catch (err) {
         logger.error('Error creating new discuss node', err as Error);

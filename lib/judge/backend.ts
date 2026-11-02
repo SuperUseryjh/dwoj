@@ -1,0 +1,121 @@
+import * as config from '../../config';
+import logger from '../logger';
+
+// ============================================================
+// 评测结果类型（judge 与各执行后端共用）
+// ============================================================
+
+export type JudgeErrorKind = 'TLE' | 'RE' | 'OLE' | 'SE' | 'CE';
+
+/** 传给前端的最终状态文案（与 views 中的徽章配色对应） */
+export const STATUS_TEXT: Record<JudgeErrorKind, string> = {
+    TLE: 'Time Limit Exceeded',
+    RE: 'Runtime Error',
+    OLE: 'Output Limit Exceeded',
+    SE: 'System Error',
+    CE: 'Compile Error',
+};
+
+export class JudgeError extends Error {
+    kind: JudgeErrorKind;
+    constructor(kind: JudgeErrorKind, message: string) {
+        super(message);
+        this.name = 'JudgeError';
+        this.kind = kind;
+    }
+}
+
+/** 未结束的提交状态（启动时会被重新入队） */
+export const UNFINISHED_STATUS = ['Pending', 'Queued', 'Running'];
+
+// ============================================================
+// 执行后端接口
+// ============================================================
+
+export interface ExecuteRequest {
+    language: string;
+    code: string;
+    input: string;
+    timeLimitMs: number;
+    maxOutputBytes: number;
+    submissionId?: number;
+}
+
+export type ExecuteOutcome =
+    | { status: 'OK'; stdout: string; timeMs: number }
+    | { status: JudgeErrorKind; message: string; timeMs?: number };
+
+export interface ExecutionBackend {
+    /** 后端名字，用于日志 */
+    readonly name: string;
+    /** 该后端支持的语言（judge 会用它做白名单校验） */
+    readonly languages: string[];
+    /** 懒加载初始化（例如启动沙箱虚拟机） */
+    init(): Promise<void>;
+    /** 执行一次用户程序 */
+    execute(req: ExecuteRequest): Promise<ExecuteOutcome>;
+    /** 释放资源 */
+    dispose(): Promise<void>;
+}
+
+// ============================================================
+// 后端选择（fail-closed：显式指定 v86 但资源缺失时不会降级）
+// ============================================================
+
+let backend: ExecutionBackend | null = null;
+let resolvedMode: 'process' | 'v86' | null = null;
+
+export function resolveSandboxMode(): 'process' | 'v86' {
+    if (resolvedMode) return resolvedMode;
+
+    const requested = String(config.JUDGE_SANDBOX || 'auto').toLowerCase();
+    if (requested === 'process') {
+        resolvedMode = 'process';
+        return resolvedMode;
+    }
+    if (requested === 'v86') {
+        // 显式要求沙箱：资源缺失也不降级，直接由 init() 报错
+        resolvedMode = 'v86';
+        return resolvedMode;
+    }
+
+    // auto：沙箱资源齐全才启用，否则退回进程后端并大声警告
+    resolvedMode = v86AssetsReady() ? 'v86' : 'process';
+    if (resolvedMode === 'process') {
+        logger.warn(
+            '[Judge] v86 sandbox assets not found in ' + config.V86_DIR +
+            ', falling back to the process backend. User code will run with server privileges — ' +
+            'run `bun run sandbox:setup` or set JUDGE_SANDBOX=v86 for isolation.'
+        );
+    }
+    return resolvedMode;
+}
+
+/** v86 运行所需的资源是否齐全（不检查内容正确性） */
+export function v86AssetsReady(): boolean {
+    const fs = require('fs');
+    return [config.V86_ASSETS.bios, config.V86_ASSETS.vgabios, config.V86_ASSETS.bzimage, config.V86_ASSETS.initramfs]
+        .every((p: string) => {
+            try { return fs.existsSync(p) && fs.statSync(p).size > 0; } catch (_) { return false; }
+        });
+}
+
+export function getBackend(): ExecutionBackend {
+    if (backend) return backend;
+
+    const mode = resolveSandboxMode();
+    if (mode === 'v86') {
+        const { V86Backend } = require('./v86_backend');
+        backend = new V86Backend();
+    } else {
+        const { ProcessBackend } = require('./process_backend');
+        backend = new ProcessBackend();
+    }
+    return backend!;
+}
+
+/** 测试用：重置单例 */
+export function resetBackend(mode?: 'process' | 'v86'): void {
+    backend = null;
+    resolvedMode = mode ?? null;
+}

@@ -11,9 +11,9 @@ import adminRoutes from './admin';
 import discussRoutes from './discuss';
 
 export default (pluginManager: any): Router => {
-    router.get('/', (req, res, next) => {
+    router.get('/', async (req, res, next) => {
         try {
-            const problems = query<Problem>("SELECT id, title FROM problems");
+            const problems = await query<Problem>("SELECT id, title FROM problems");
             res.render('index', { problems });
         } catch (err) {
             logger.error('Error fetching problems for index page', err as Error);

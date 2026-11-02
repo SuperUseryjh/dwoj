@@ -2,7 +2,7 @@ import fs from 'fs-extra';
 import path from 'path';
 import crypto from 'crypto';
 import logger from './logger';
-import { queryOne, execute } from './database';
+import { queryOne, execute, upsertSql } from './database';
 
 // New Plugin class
 class Plugin {
@@ -121,7 +121,9 @@ class PluginSystem {
                 const manifest = pluginModule.manifest || {};
                 const requestedPermissions = manifest.permissions || [];
 
-                const dbConfig = queryOne("SELECT enabled, token, permissions FROM plugin_configs WHERE filename = ?", [file]);
+                const dbConfig = await queryOne<{ enabled: number; token: string; permissions: string | null }>(
+                    "SELECT enabled, token, permissions FROM plugin_configs WHERE filename = ?", [file]
+                );
 
                 let isEnabled = dbConfig ? (dbConfig.enabled === 1) : false;
                 let token = dbConfig ? dbConfig.token : crypto.randomBytes(16).toString('hex');
@@ -130,7 +132,13 @@ class PluginSystem {
                 this.oj.logger.info(`[PluginSystem] Loading ${file}: dbConfig = ${JSON.stringify(dbConfig)}, grantedPermissions = ${JSON.stringify(grantedPermissions)}`);
 
                 if (!dbConfig || !dbConfig.token) {
-                    execute("INSERT OR REPLACE INTO plugin_configs (filename, enabled, token, permissions) VALUES (?, ?, ?, ?)",
+                    // 不同数据库的 upsert 语法不同，交给数据库层生成
+                    await execute(upsertSql(
+                        'plugin_configs',
+                        ['filename', 'enabled', 'token', 'permissions'],
+                        ['filename'],
+                        ['enabled', 'token', 'permissions'],
+                    ),
                         [file, isEnabled ? 1 : 0, token, JSON.stringify(grantedPermissions)]);
                 }
 
@@ -264,7 +272,7 @@ class PluginSystem {
             else this._builtinEnabled.delete(name);
         } else {
             const enabledValue = enabled ? 1 : 0;
-            execute("UPDATE plugin_configs SET enabled = ? WHERE filename = ?", [enabledValue, filename]);
+            await execute("UPDATE plugin_configs SET enabled = ? WHERE filename = ?", [enabledValue, filename]);
         }
         await this.loadAll();
     }
@@ -282,7 +290,7 @@ class PluginSystem {
                 logger.error(`Error deleting plugin file ${p}`, e as Error);
             }
         }
-        execute("DELETE FROM plugin_configs WHERE filename = ?", [filename]);
+        await execute("DELETE FROM plugin_configs WHERE filename = ?", [filename]);
         await this.loadAll();
     }
 }

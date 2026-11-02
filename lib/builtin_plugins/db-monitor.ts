@@ -21,10 +21,11 @@ function wrapDatabase(): void {
     if (wrapped) return;
     const funcs = ['query', 'queryOne', 'execute'] as const;
     for (const name of funcs) {
-        wrapDbFunction(name, (original) => (...args: any[]): any => {
+        wrapDbFunction(name, (original) => async (...args: any[]): Promise<any> => {
             const start = performance.now();
             try {
-                const result = original(...args);
+                // 数据库访问已全部异步化，必须 await 才能拿到真实耗时
+                const result = await original(...args);
                 const elapsed = performance.now() - start;
                 const s = stats[name];
                 s.count++;
