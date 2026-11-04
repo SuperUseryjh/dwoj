@@ -1,5 +1,9 @@
-import logger from '../logger';
+import { createLogger } from '../logger';
+
+
 import { wrapDbFunction } from '../database';
+
+const logger = createLogger('dbmon');
 
 interface FuncStats {
     count: number;
@@ -37,7 +41,7 @@ function wrapDatabase(): void {
                         timestamp: new Date().toISOString(),
                     });
                     if (s.slowQueries.length > 50) s.slowQueries.shift();
-                    logger.warn(`[DB-Monitor] Slow ${name}: ${String(args[0])} (${Math.round(elapsed)}ms)`);
+                    logger.warn(`Slow ${name}: ${String(args[0])} (${Math.round(elapsed)}ms)`);
                 }
                 return result;
             } catch (err) {
@@ -49,7 +53,7 @@ function wrapDatabase(): void {
         });
     }
     wrapped = true;
-    logger.info('[DB-Monitor] Database functions wrapped for performance monitoring');
+    logger.info('Database functions wrapped for performance monitoring');
 }
 
 function resetStats(): void {
@@ -87,7 +91,7 @@ export function onRoute(_oj: any, _db: any, _getPluginExports: any, app: any): v
 
 export function onDisable(): void {
     resetStats();
-    logger.info('[DB-Monitor] Performance monitoring stopped');
+    logger.info('Performance monitoring stopped');
 }
 
 export { stats };

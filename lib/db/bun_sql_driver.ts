@@ -1,6 +1,8 @@
 import { SQL } from 'bun';
-import logger from '../logger';
+import { createLogger } from '../logger';
 import type { DriverKind, ExecuteResult, SqlDriver, SqlParams } from './driver';
+
+const logger = createLogger('db');
 
 /**
  * 基于 Bun 内置 SQL 客户端的驱动实现。
@@ -151,7 +153,7 @@ export class BunSqlDriver implements SqlDriver {
     async init(): Promise<void> {
         // 触发一次真实连接，让配置错误在启动阶段就暴露，而不是等第一个请求
         await this.sql.unsafe('SELECT 1');
-        logger.info(`[DB] connected via Bun.SQL (${this.kind})`);
+        logger.info(`connected via Bun.SQL (${this.kind})`);
     }
 
     async query<T = any>(sql: string, params: SqlParams = []): Promise<T[]> {

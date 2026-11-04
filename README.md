@@ -29,9 +29,13 @@ dwoj/
 │   └── partials/
 ├── tests/              (单元测试)
 ├── lib/
+│   ├── ipc/            (进程编排 broker + 子进程 IPC 节点)
+│   ├── db/             (数据库驱动: Bun.SQL / 远程 IPC 驱动 / db 进程)
+│   ├── http/           (HTTP 进程入口)
+│   ├── judge/          (评测后端: v86 沙箱 / 本机进程 / 队列)
 │   ├── bun-http.ts     (HTTP 服务器框架)
-│   ├── database.ts     (数据库操作)
-│   ├── logger.ts       (日志模块)
+│   ├── database.ts     (数据库操作入口，按进程角色选本地/远程驱动)
+│   ├── logger.ts       (日志模块，多进程共用同一个日志文件)
 │   ├── plugin_system.ts (插件系统)
 │   └── updater.ts      (自动更新)
 ├── middleware/
@@ -55,7 +59,9 @@ dwoj/
    ```bash
    bun app.ts
    ```
-   如果看到输出 `DWOJ 2.0 running on port 3000 (Bun + TypeScript)`，说明启动成功。
+   如果看到 DWOJ 的 ASCII 横幅（包含版本号、监听地址、评测后端与日志文件名），
+   并在最后打出 `DWOJ 4.0.0 running in multi-process mode on port 3000`，说明启动成功
+   （日志里还会依次出现 `db ready` / `http ready` / `judge ready`）。
 
    *开发模式（文件修改后自动重启）：*
    ```bash
@@ -70,6 +76,54 @@ dwoj/
    - **用户名**: `root`
    - **密码**: `root`
    - *请登录后尽快修改密码。*
+
+### 进程模型（多进程架构）
+
+`bun app.ts` 启动的是 **broker**，它本身只做 IPC 连接器，不监听端口、不连数据库：
+
+```text
+            ┌───────────────── broker (app.ts) ─────────────────┐
+            │  拉起/重启子进程 · 按 {to} 转发消息 · 优雅关闭    │
+            └───┬──────────────────┬───────────────────┬────────┘
+                │ NDJSON           │ NDJSON            │ NDJSON
+        ┌───────▼───────┐  ┌───────▼───────┐  ┌────────▼────────┐
+        │      db       │  │     http      │  │      judge      │
+        │ 唯一持有数据库 │  │ Bun.serve/EJS │  │ 队列 + 沙箱后端  │
+        └───────────────┘  └───────────────┘  └─────────────────┘
+```
+
+| 进程 | 职责 | 关键文件 |
+|------|------|----------|
+| broker | 进程编排、消息路由、崩溃重启、更新检查 | `app.ts`、`lib/ipc/broker.ts` |
+| db | 唯一持有数据库连接（SQLite / MySQL / PG），建表迁移、响应 SQL | `lib/db/db_service.ts` |
+| http | `Bun.serve` + 路由 + EJS + 静态文件 + 插件注入 | `lib/http/http_service.ts` |
+| judge | 评测队列 + v86 沙箱 / 本机后端，回调插件钩子 | `lib/judge/judge_service.ts` |
+
+- 子进程之间**不直接通信**，全部经 broker 按 `{to}` 字段转发（NDJSON over stdin/stdout，
+  见 `lib/ipc/protocol.ts`）；`DWOJ_IPC_TRACE=1` 可以打印每条消息。
+- `lib/database.ts` 会按进程角色自动选择驱动：db 进程用本地驱动，
+  http/judge 用 `RemoteSqlDriver` 把 SQL 转发出去 —— 业务代码完全不用改。
+- **故障恢复**：任一子进程退出，broker 立即广播 `peer-down`，其它进程里发往它的请求
+  立刻失败（HTTP 返回 500、提交判 `System Error`），1s 后按指数退避重启；
+  judge 重启后会自动把 `Pending`/`Running` 的提交重新排队。
+- 日志格式统一为 `[等级][模块] 时间 信息`：模块名最长 **6 字符**，后面补空格，
+  让所有日志的时间列对齐：
+
+  ```text
+  [INFO][broker] 2026-11-04T10:24:49.980Z starting db (db_service.ts)
+  [INFO][db]     2026-11-04T10:24:50.121Z connected via Bun.SQL (sqlite)
+  [WARN][judge]  2026-11-04T10:24:49.979Z 评测后端为 process（无隔离）…
+  [ERRO][update] 2026-11-04T10:24:50.493Z Error checking for updates:
+  ```
+
+  等级统一 4 个字符（`INFO` / `WARN` / `ERRO`），模块名 ≤6 字符。
+
+  模块名由 `createLogger('模块名')` 统一加，业务代码里不再手写 `[Judge]` 之类的标签；
+  现有模块：`broker` / `db` / `http` / `judge` / `v86` / `plugin` / `dbmon` / `update`。
+  插件日志的模块名由插件自己决定（`manifest.name` 规整后 ≤6 字符，见 `plugin.md`）。
+- 日志统一写到 `log/app_<时间戳>.log`。子进程的 stdout 被 IPC 占用，因此它们把日志整行交给
+  broker 打印：**INFO 走 stdout，只有 WARN / ERRO 走 stderr** —— 终端里不会再把普通 INFO 渲染成红色。
+- 调试或没有 IPC 的环境可以退回单进程：`DWOJ_SINGLE_PROCESS=1 bun app.ts`。
 
 ### 运行测试
 
@@ -93,10 +147,15 @@ bun test tests/database.test.ts
 | `JWT_SECRET` | JWT 签名密钥（**生产环境必须修改**） | `your_jwt_secret_key` |
 | `JUDGE_CONCURRENCY` | 同时评测的提交数上限 | `2` |
 | `JUDGE_SANDBOX` | 执行后端：`v86` / `process` / `auto` | `auto` |
-| `V86_MEMORY_MB` | v86 客户机内存 | `192` |
+| `V86_MEMORY_MB` | v86 客户机内存（需容纳 ~150MB initramfs） | `512` |
 | `V86_BOOT_TIMEOUT_MS` | 客户机冷启动超时 | `180000` |
+| `V86_COMPILE_TIMEOUT_MS` | 沙箱内 C++ 编译超时 | `180000` |
+| `COMPILE_TIMEOUT_MS` | 本机后端 C++ 编译超时 | `20000` |
+| `JUDGE_WORKER` | 单进程模式下是否把执行后端再拆一个子进程（`0` 关闭，调试/测试用） | `1` |
 | `ENABLED_BUILTIN_PLUGINS` | 启用的内置插件（逗号分隔） | `db-monitor` |
 | `JUDGE_SANDBOX_ACK` | 设为 `1` 跳过无隔离后端的启动风险确认（仅限非交互部署） | 空 |
+| `DWOJ_SINGLE_PROCESS` | 设为 `1` 时所有服务跑在一个进程里（调试 / 无 IPC 环境） | 空 |
+| `DWOJ_IPC_TRACE` | 设为 `1` 时打印每条进程间消息 | 空 |
 
 #### 数据库配置
 
@@ -160,9 +219,13 @@ pm2 monit
      - 文件命名: `1.in`, `1.out`, `2.in`, `2.out` ...（输入输出需一一对应）。
 
 2. **评测机制**:
-   - 系统支持 Python 3（`python3`/`python`，自动探测并校验主版本）和 Node.js（`bun`，缺失时回退 `node`）。
+   - 语言：**Python 3**、**C++（g++ -O2 -std=c++17）**、**Node.js**（本机后端支持；沙箱后端因模拟器里启动太慢暂不开放）。
    - 提交后进入评测队列，由 `JUDGE_CONCURRENCY` 控制并发，同一用户两次提交间隔不得小于 3 秒。
-   - 每个测试点独立进程执行，工作目录是 `data/judge_tmp/<uuid>/`（评测结束即删除）。
+   - **评测跑在独立的 `judge` 进程里**（见下面的「进程模型」）：HTTP 进程只发一条
+     `enqueue` 消息，沙箱把 WASM 内存吃爆或把客户机搞崩只会带走 judge 进程，
+     broker 会重新拉起它，并把受影响的提交判为 `System Error` / 自动重新排队。
+   - 本机后端：每个测试点独立子进程执行，工作目录是 `data/judge_tmp/<uuid>/`（评测结束即删除）；
+     C++ 先编译再运行，编译失败判 `Compile Error`。
    - 每个测试点的时间限制取自题目的 `timeLimit`（毫秒，限制在 200–10000 之间），输出上限 1 MB。
    - 输出比对规则：统一 `\r\n` / `\n`、忽略**行末**空格与文末多余空行，行首与行内空格仍然敏感。
    - 测试点按 `1.in < 2.in < 10.in` 的数字序执行；缺少对应的 `.out` 会直接判定为 `System Error`。
@@ -177,17 +240,25 @@ pm2 monit
 不需要 root、容器或 nsjail，Windows 上也能用）：
 
 ```bash
-bun run sandbox:setup   # 一次性下载 BIOS / 内核 / Python，生成 initramfs（约 15 MB）
+bun run sandbox:setup   # 一次性下载 BIOS / 内核 / Python / g++，生成 initramfs（约 55 MB 压缩、150 MB 解压）
 JUDGE_SANDBOX=v86 bun app.ts
 ```
 
 - 用户代码运行在一台 **32 位 Alpine Linux** 虚拟机里（v86 不支持 64 位内核与 PAE）：
   没有网络设备、看不到宿主机文件系统，只能通过串口和 9p 共享目录拿到本次评测的源码与输入。
-- 客户机在 OJ 启动时后台冷启动（约 30~60 s，日志里搜 `[Judge/v86]`），之后常驻内存，
-  每个测试点约 1~4 s；被搞死时整台重建，不影响服务。
-- 限制：**沙箱模式只支持 Python**（Node.js 在模拟器里启动太慢，会被判为
-  `Compile Error`）；时间限制包含模拟器里 Python 的启动开销，适合练手/内网场景，
-  不适合严格的竞赛计时。
+- 客户机里常驻一个 **Python 评测守护进程**（`/mnt/9p/daemon.py`）：
+  * Python 提交：`fork` 子进程执行用户代码，省掉解释器冷启动 →
+    单测试点约 **50~200 ms**（早期实现每次重开解释器是 1~4 s）；
+  * C++ 提交：**每个提交只编译一次**（`g++ -O2 -std=c++17`，模拟器里约 5~20 s），
+    之后每个测试点直接跑二进制，约 **20~50 ms**。
+- 客户机在 OJ 启动时后台冷启动（总耗时约 1.5~2.5 分钟：内核解压 ~70 s +
+  守护进程预热 ~45 s + 编译预热 ~15 s，日志里搜 `[Judge/v86]`），之后常驻内存；
+  被搞死时整台重建，不影响服务。initramfs 带 Python+g++，解压后约 150 MB，所以
+  `V86_MEMORY_MB` 默认 512（小于 512 会导致内核解压 initramfs 失败）。
+- 沙箱跑在独立的 `judge` 进程里（见「进程模型」），broker 和 HTTP 进程都不持有
+  虚拟机的 WASM 内存；judge 崩溃后 broker 会自动重启它并重新排队未完成的提交。
+- 限制：**沙箱模式不支持 Node.js**（会被判为 `Compile Error` 并提示支持列表）；
+  C++ 编译时间也算在提交里，适合练手/内网场景，不适合严格的竞赛计时。
 - 不想用虚拟机时设 `JUDGE_SANDBOX=process`，用户代码会以 **服务器进程权限** 直接执行，
   仅限本地开发；这种情况下 `auto` 会在日志里打印醒目警告。
 

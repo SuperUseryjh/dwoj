@@ -5,8 +5,10 @@ import path from 'path';
 import * as config from '../config';
 import { requireLogin, requireRole, ROLE_LV } from '../middleware/auth';
 import { Problem, query, queryOne, execute } from '../lib/database';
-import { enqueueJudge, getSupportedLanguages, isJudging, STATUS_TEXT } from '../controllers/judge';
-import logger from '../lib/logger';
+import { enqueueJudge, getSupportedLanguages, isJudging, STATUS_TEXT } from '../lib/judge/judge_client';
+import { createLogger } from '../lib/logger';
+
+const logger = createLogger('http');
 
 /** 同一用户两次提交之间的最小间隔，防止刷屏式提交压垮评测机 */
 const SUBMIT_COOLDOWN_MS = 3000;
@@ -157,7 +159,7 @@ router.post('/submission/:id/rejudge', requireRole('super_user'), async (req, re
             res.status(404).send('提交不存在');
             return;
         }
-        if (isJudging(sub.id)) {
+        if (await isJudging(sub.id)) {
             res.status(409).send('该提交正在评测中，请稍后再试');
             return;
         }

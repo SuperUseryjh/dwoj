@@ -162,6 +162,42 @@ oj.logger.info("应用程序端口:", oj.config.PORT);
 
 如果插件尝试执行未经授权的操作，例如在没有 `write_db` 权限的情况下调用 `db.run`，代理将抛出 `Unauthorized action: db_write` 错误。
 
+### 5.1 日志（不需要自己注册）
+
+插件**不需要注册日志器**：插件被加载时，`Plugin` 包装器会为它创建一个带独立模块名的
+logger，通过 `oj.logger` 暴露出来。
+
+- 模块名来源：优先 `manifest.name`，没有就用文件名；统一规整成 **≤6 个小写字符**
+  （小写 + 只保留字母数字/下划线，超出截断）。例如：
+  - `name: 'hello-plugin'` → `[hello]`
+  - `name: 'db-monitor'` → `[dbmon]`
+  - 没有 `manifest.name`、文件叫 `my-plugin.js` → `[myplu]`
+- 访问 `oj.logger` / `oj.app` / `oj.config` 不需要额外权限。
+- 用法：
+
+```javascript
+module.exports = {
+    manifest: { name: 'hello-plugin', permissions: [] },
+    onLoad: function (oj) {           // 插件启用时调用一次
+        oj.logger.info('plugin initialized');
+    },
+    onRoute: function (oj) {
+        oj.logger.warn('registering routes');
+    }
+};
+```
+
+- 输出格式统一为 `[等级][模块] 时间 信息`，例如：
+
+```text
+[INFO][hello]  2026-11-04T10:24:50.316Z plugin initialized
+[WARN][hello]  2026-11-04T10:24:50.316Z registering routes
+```
+
+- 日志会写进 OJ 的统一日志文件（`log/app_*.log`），同时由主进程汇总到控制台
+  （INFO 走 stdout，WARN/ERRO 走 stderr）。
+- 内置插件 `db-monitor` 使用自己的模块名 `[dbmon]`。
+
 ## 6. 插件管理 (管理员界面)
 
 管理员可以通过管理界面管理插件：

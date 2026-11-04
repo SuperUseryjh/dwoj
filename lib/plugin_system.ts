@@ -1,10 +1,25 @@
 import fs from 'fs-extra';
 import path from 'path';
 import crypto from 'crypto';
-import logger from './logger';
+import { createLogger, normalizeModuleName } from './logger';
+
+
+
 import { queryOne, execute, upsertSql } from './database';
 
+const logger = createLogger('plugin');
+
 // New Plugin class
+/**
+ * 插件日志的模块名：
+ *   优先用 manifest.name，没有就用文件名（内置插件去掉 "builtin:" 前缀），
+ *   规整成 ≤6 字符的小写标识；实在推导不出来就退回 "plugin"。
+ */
+export function resolveLogModule(name: string | undefined, fallback: string): string {
+    const base = String(name || fallback).replace(/^builtin:/, '');
+    return normalizeModuleName(base) || 'plugin';
+}
+
 class Plugin {
     module: Record<string, any>;
     oj: any;
@@ -16,9 +31,22 @@ class Plugin {
     ojProxy: any;
     dbProxy: any;
 
-    constructor(pluginModule: any, oj: any, db: any, token: string, permissions: string[], pluginSystemRef: PluginSystem) {
+    /** 插件日志的模块名（≤6 字符），由 manifest.name / 文件名推导，见 resolveLogModule */
+    readonly logModule: string;
+
+    constructor(
+        pluginModule: any,
+        oj: any,
+        db: any,
+        token: string,
+        permissions: string[],
+        pluginSystemRef: PluginSystem,
+        logModule: string = 'plugin',
+    ) {
         this.module = pluginModule;
-        this.oj = oj;
+        this.logModule = logModule;
+        // 给插件一个带自己名字的 logger：oj.logger.info() 会打印成 [INFO][插件名]
+        this.oj = { ...oj, logger: createLogger(logModule) };
         this.db = db;
         this.token = token;
         this.permissions = new Set(permissions || []);
@@ -32,7 +60,7 @@ class Plugin {
     _checkPermission(resource: string, action: string, permissionToCheck?: string): void {
         const actualPermission = permissionToCheck || `${resource}_${action}`;
         if (!this.permissions.has(actualPermission)) {
-            this.oj.logger.warn(`[Plugin] Plugin with token ${this.token} attempted unauthorized action: ${actualPermission}`);
+            logger.warn(`plugin attempted unauthorized action: ${actualPermission}`);
             throw new Error(`Unauthorized action: ${actualPermission}`);
         }
     }
@@ -129,7 +157,7 @@ class PluginSystem {
                 let token = dbConfig ? dbConfig.token : crypto.randomBytes(16).toString('hex');
                 let grantedPermissions = dbConfig && dbConfig.permissions ? JSON.parse(dbConfig.permissions) : requestedPermissions;
 
-                this.oj.logger.info(`[PluginSystem] Loading ${file}: dbConfig = ${JSON.stringify(dbConfig)}, grantedPermissions = ${JSON.stringify(grantedPermissions)}`);
+                logger.info(`loading ${file}: dbConfig = ${JSON.stringify(dbConfig)}, grantedPermissions = ${JSON.stringify(grantedPermissions)}`);
 
                 if (!dbConfig || !dbConfig.token) {
                     // 不同数据库的 upsert 语法不同，交给数据库层生成
@@ -142,7 +170,8 @@ class PluginSystem {
                         [file, isEnabled ? 1 : 0, token, JSON.stringify(grantedPermissions)]);
                 }
 
-                const wrappedPlugin = new Plugin(pluginModule, this.oj, this.db, token, grantedPermissions, this);
+                const logModule = resolveLogModule(manifest.name, file);
+                const wrappedPlugin = new Plugin(pluginModule, this.oj, this.db, token, grantedPermissions, this, logModule);
 
                 this.plugins[file] = {
                     module: wrappedPlugin,
@@ -159,13 +188,20 @@ class PluginSystem {
                     this.pluginExports[manifest.name || file] = wrappedPlugin.exports;
                 }
 
-                if (isEnabled && typeof pluginModule.onRoute === 'function') {
-                    logger.info(`[Plugin] Hot-registering routes for ${file}`);
-                    wrappedPlugin.executeHook('onRoute', this.app);
+                if (isEnabled) {
+                    // 外部插件此前漏掉了 onLoad（只有内置插件会调用），
+                    // 导致插件没办法在加载阶段初始化自己的日志/状态
+                    if (typeof pluginModule.onLoad === 'function') {
+                        wrappedPlugin.executeHook('onLoad');
+                    }
+                    if (typeof pluginModule.onRoute === 'function') {
+                        logger.info(`hot-registering routes for ${file}`);
+                        wrappedPlugin.executeHook('onRoute', this.app);
+                    }
                 }
 
             } catch (e) {
-                logger.error(`[Plugin] Failed to load ${file}:`, e as Error);
+                logger.error(`Failed to load ${file}:`, e as Error);
             }
         }
 
@@ -180,7 +216,7 @@ class PluginSystem {
             // eslint-disable-next-line @typescript-eslint/no-require-imports
             registry['db-monitor'] = require('./builtin_plugins/db-monitor');
         } catch (e) {
-            logger.error('[PluginSystem] Failed to load builtin plugin db-monitor:', e as Error);
+            logger.error('Failed to load builtin plugin db-monitor:', e as Error);
         }
         return registry;
     }
@@ -194,7 +230,8 @@ class PluginSystem {
             const token = `builtin:${name}`;
             const permissions = manifest.permissions || [];
 
-            const wrappedPlugin = new Plugin(pluginModule, this.oj, this.db, token, permissions, this);
+            const logModule = resolveLogModule(manifest.name, `builtin:${name}`);
+            const wrappedPlugin = new Plugin(pluginModule, this.oj, this.db, token, permissions, this, logModule);
 
             const filename = `builtin:${name}`;
             this.plugins[filename] = {
@@ -215,7 +252,7 @@ class PluginSystem {
                 }
                 this.pluginExports[manifest.name || name] = wrappedPlugin.exports;
                 if (typeof pluginModule.onRoute === 'function') {
-                    logger.info(`[Plugin] Hot-registering routes for builtin:${name}`);
+                    logger.info(`Hot-registering routes for builtin:${name}`);
                     wrappedPlugin.executeHook('onRoute', this.app);
                 }
             }
@@ -234,7 +271,7 @@ class PluginSystem {
                     const res = p.module.executeHook(hookName, ...args);
                     if (res) results.push(res);
                 } catch (e) {
-                    logger.error(`[Plugin Error] [${p.name || p.filename}] [${hookName}]:`, e as Error);
+                    logger.error(`hook ${hookName} failed in ${p.name || p.filename}`, e as Error);
                 }
             }
         });
@@ -279,7 +316,7 @@ class PluginSystem {
 
     async delete(filename: string): Promise<void> {
         if (filename.startsWith('builtin:')) {
-            logger.warn(`[PluginSystem] Cannot delete builtin plugin: ${filename}`);
+            logger.warn(`Cannot delete builtin plugin: ${filename}`);
             return;
         }
         const p = path.join(this.pluginDir, filename);

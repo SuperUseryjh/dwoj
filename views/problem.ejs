@@ -42,7 +42,11 @@
                                 const langOptions = (typeof languages !== 'undefined' && languages.length > 0)
                                     ? languages
                                     : ['python', 'node'];
-                                const langLabels = { python: 'Python 3', node: 'Node.js (Bun)' };
+                                const langLabels = {
+                                    python: 'Python 3',
+                                    node: 'Node.js (Bun)',
+                                    cpp: 'C++ (g++ -O2)',
+                                };
                             %>
                             <select name="language" class="form-select">
                                 <% langOptions.forEach(function (lang) { %>

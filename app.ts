@@ -1,50 +1,50 @@
 import fs from 'fs-extra';
 import path from 'path';
-
 import * as config from './config';
-import { initDb } from './lib/database';
-import logger from './lib/logger';
-import { App } from './lib/bun-http';
-import PluginSystem from './lib/plugin_system';
-import Updater from './lib/updater';
-import globalMiddleware from './middleware/global';
-import createRoutes from './routes/index';
-import { initJudge } from './controllers/judge';
+import { createLogger, newLogFileName } from './lib/logger';
+import { printBanner } from './lib/banner';
 import { confirmUnisolatedJudge } from './lib/judge/risk_ack';
+import { Broker } from './lib/ipc/broker';
+import Updater from './lib/updater';
 
-const app = new App();
+const logger = createLogger('broker');
+
+/**
+ * DWOJ 入口。
+ *
+ * 默认是**多进程模式**：本进程只作为 broker（IPC 连接器），负责
+ *   - 拉起 db / http / judge 三个子进程，并等待它们就绪
+ *   - 转发子进程之间的消息（星型拓扑）
+ *   - 子进程崩溃后按退避策略重启，并通知其它进程
+ *   - 优雅关闭
+ *
+ * 设置 `DWOJ_SINGLE_PROCESS=1` 可以退回单进程模式（调试/无 IPC 环境）。
+ */
+
 const appRoot = path.resolve(__dirname);
+const singleProcess = ['1', 'true', 'yes'].includes(
+    String(process.env.DWOJ_SINGLE_PROCESS || '').toLowerCase(),
+);
 
-async function main(): Promise<void> {
-    // 初始化目录
+// 多进程模式下由本进程决定日志文件，子进程继承
+if (!singleProcess && !process.env.DWOJ_LOG_FILE) {
+    process.env.DWOJ_LOG_FILE = newLogFileName();
+}
+
+function ensureDirs(): void {
     fs.ensureDirSync(config.DATA_DIR);
     fs.ensureDirSync(config.PROB_DIR);
     fs.ensureDirSync(config.UPLOAD_DIR);
     fs.ensureDirSync(config.PLUGINS_DIR);
     fs.ensureDirSync(config.JUDGE_DIR);
+}
 
-    // 初始化数据库（建表 / 迁移 / 默认数据）。
-    // 数据库驱动可能是远程的 MySQL / PostgreSQL，因此必须 await。
-    await initDb();
+// ============================================================
+// 多进程模式（默认）
+// ============================================================
 
-    // 设置视图引擎目录
-    app.set('view engine', 'ejs');
-
-    // 静态文件服务
-    app.use(app.static('public'));
-
-    // 初始化插件系统
-    const database = require('./lib/database');
-    const oj = { app, db: database.db, config, logger };
-    const pluginManager = new PluginSystem(config.PLUGINS_DIR, oj, config.ENABLED_BUILTIN_PLUGINS);
-    await pluginManager.loadAll();
-    app.set('pluginManager', pluginManager);
-
-    // 全局中间件
-    app.use(globalMiddleware(pluginManager));
-
-    // 挂载路由
-    app.use(createRoutes(pluginManager));
+async function runBroker(): Promise<void> {
+    ensureDirs();
 
     // 无隔离后端必须先由运维在控制台确认风险，否则拒绝启动。
     // 使用 v86 沙箱时这里直接通过，不产生任何交互。
@@ -53,14 +53,90 @@ async function main(): Promise<void> {
         process.exit(1);
     }
 
-    // 初始化评测队列（同时重新排队上次未跑完的提交）
+    const broker = new Broker();
+    let stopping = false;
+    const shutdown = async (signal: string): Promise<void> => {
+        if (stopping) return;
+        stopping = true;
+        logger.info(`received ${signal}, shutting down`);
+        await broker.stop();
+        process.exit(0);
+    };
+    process.on('SIGINT', () => void shutdown('SIGINT'));
+    process.on('SIGTERM', () => void shutdown('SIGTERM'));
+
+    await broker.start();
+
+    // 启动完成（沙箱客户机还在后台冷启动，不影响这里）
+    const judgeInfo = broker.info('judge');
+    printBanner({
+        version: config.CURRENT_VERSION,
+        port: config.PORT,
+        mode: 'multi-process',
+        backend: judgeInfo.backend,
+        languages: judgeInfo.languages,
+        pid: process.pid,
+        logFile: process.env.DWOJ_LOG_FILE,
+    });
+    logger.info(`DWOJ ${config.CURRENT_VERSION} running in multi-process mode on port ${config.PORT} ` +
+        `(broker pid ${process.pid}, backend=${judgeInfo.backend ?? 'unknown'}, log ${process.env.DWOJ_LOG_FILE})`);
+
+    // 检查并应用更新（管理员功能；更新后需要重启才会生效）
+    const updater = new Updater(appRoot);
+    const updated = await updater.checkAndApplyUpdate();
+    if (updated) {
+        logger.info('Application updated. Please restart the server to load the new version.');
+    }
+}
+
+// ============================================================
+// 单进程模式（DWOJ_SINGLE_PROCESS=1，调试用）
+// ============================================================
+
+async function runSingleProcess(): Promise<void> {
+    const { App } = await import('./lib/bun-http');
+    const { initDb } = await import('./lib/database');
+    const { default: PluginSystem } = await import('./lib/plugin_system');
+    const { default: globalMiddleware } = await import('./middleware/global');
+    const { default: createRoutes } = await import('./routes/index');
+    const { initJudge } = await import('./controllers/judge');
+
+    ensureDirs();
+    await initDb();
+
+    const app = new App();
+    app.set('view engine', 'ejs');
+    app.use(app.static('public'));
+
+    const database = require('./lib/database');
+    const oj = { app, db: database.db, config, logger };
+    const pluginManager = new PluginSystem(config.PLUGINS_DIR, oj, config.ENABLED_BUILTIN_PLUGINS);
+    await pluginManager.loadAll();
+    app.set('pluginManager', pluginManager);
+
+    app.use(globalMiddleware(pluginManager));
+    app.use(createRoutes(pluginManager));
+
+    if (!confirmUnisolatedJudge()) {
+        logger.error('启动已取消：评测机未启用隔离沙箱，且未完成风险确认。');
+        process.exit(1);
+    }
+
     await initJudge(pluginManager);
 
-    // 启动服务器
     app.listen(config.PORT, async () => {
-        logger.info(`DWOJ 3.0 running on port ${config.PORT} (Bun + TypeScript)`);
-
-        // 检查并应用更新
+        const { getBackend } = await import('./lib/judge/backend');
+        const { getSupportedLanguages } = await import('./lib/judge/judge_client');
+        printBanner({
+            version: config.CURRENT_VERSION,
+            port: config.PORT,
+            mode: 'single-process',
+            backend: getBackend().name,
+            languages: getSupportedLanguages(),
+            pid: process.pid,
+            logFile: process.env.DWOJ_LOG_FILE,
+        });
+        logger.info(`DWOJ ${config.CURRENT_VERSION} running on port ${config.PORT} (single-process mode)`);
         const updater = new Updater(appRoot);
         const updated = await updater.checkAndApplyUpdate();
         if (updated) {
@@ -69,7 +145,7 @@ async function main(): Promise<void> {
     });
 }
 
-main().catch(err => {
+(singleProcess ? runSingleProcess() : runBroker()).catch(err => {
     logger.error('Failed to start DWOJ', err as Error);
     process.exit(1);
 });

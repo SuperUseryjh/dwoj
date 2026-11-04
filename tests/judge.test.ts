@@ -105,6 +105,45 @@ describe('judge / testcase loading', () => {
     });
 });
 
+describe('judge / c++ execution', () => {
+    const HAS_COMPILER = (() => {
+        try {
+            return ['g++', 'gcc'].some(cmd => {
+                try { return spawnSync(cmd, ['--version']).status === 0; } catch { return false; }
+            });
+        } catch {
+            return false;
+        }
+    })();
+
+    test('compiles and runs a c++ program', async () => {
+        if (!HAS_COMPILER) return;
+        const code = [
+            '#include <cstdio>',
+            'int main() {',
+            '    int a, b;',
+            '    if (scanf("%d %d", &a, &b) != 2) return 0;',
+            '    printf("%d\\n", a + b);',
+            '    return 0;',
+            '}',
+        ].join('\n');
+        const out = await executeProgram('cpp', code, '2 3\n', 20000);
+        expect(compareOutput(out, '5')).toBe(true);
+    });
+
+    test('reports compile errors instead of runtime errors', async () => {
+        if (!HAS_COMPILER) return;
+        await expect(executeProgram('cpp', 'int main() { this is not c++ }', '', 20000))
+            .rejects.toMatchObject({ kind: 'CE' });
+    });
+
+    test('classifies crashing binaries as runtime errors', async () => {
+        if (!HAS_COMPILER) return;
+        await expect(executeProgram('cpp', 'int main() { int *p = nullptr; *p = 1; return 0; }', '', 20000))
+            .rejects.toMatchObject({ kind: 'RE' });
+    });
+});
+
 describe('judge / sandboxed execution', () => {
     test('returns stdout for a passing program', async () => {
         if (!HAS_PYTHON) return;

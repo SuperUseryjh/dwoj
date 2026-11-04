@@ -26,9 +26,15 @@ mock.module('../lib/logger', () => ({
     info: mock(() => {}),
     warn: mock(() => {}),
     error: mock(() => {}),
+    createLogger: () => ({ info: mock(() => {}), warn: mock(() => {}), error: mock(() => {}) }),
+    normalizeModuleName: (name: string) => String(name || '')
+        .toLowerCase()
+        .replace(/\.[jt]s$/, '')
+        .slice(0, 6)
+        .replace(/[^a-z0-9_]/g, ''),
 }));
 
-import PluginSystem from '../lib/plugin_system';
+import PluginSystem, { resolveLogModule } from '../lib/plugin_system';
 
 const TEST_PLUGIN_DIR = path.join(__dirname, '_test_plugins');
 
@@ -78,6 +84,14 @@ describe('PluginSystem', () => {
         } catch {}
     });
 
+    test('插件日志模块名：manifest.name 优先、截断到 6 字符', () => {
+        expect(resolveLogModule('db-monitor', 'db-monitor.js')).toBe('dbmon');
+        expect(resolveLogModule('my-plugin', 'whatever.js')).toBe('myplu');
+        expect(resolveLogModule(undefined, 'my-plugin.js')).toBe('myplu');
+        expect(resolveLogModule('', 'x.js')).toBe('x');
+        expect(resolveLogModule('!!!', '')).toBe('plugin');
+    });
+
     test('constructor initializes plugin directory', () => {
         // Remove dir created in beforeEach to test constructor creates it
         fs.rmdirSync(TEST_PLUGIN_DIR);
@@ -118,6 +132,8 @@ module.exports = {
         await pluginSystem.loadAll();
 
         expect(Object.keys(pluginSystem.plugins)).toHaveLength(2); // 1 external + 1 built-in
+        // 'test-plugin' → 截断到 6 字符 "test-p" → 去掉连字符 → "testp"
+        expect(pluginSystem.plugins['test-plugin.js'].module.logModule).toBe('testp');
         expect(pluginSystem.plugins['test-plugin.js'].name).toBe('test-plugin');
         expect(pluginSystem.plugins['test-plugin.js'].enabled).toBe(false); // Not in DB, default disabled
         expect(pluginSystem.plugins['test-plugin.js'].permissions).toEqual(['oj_access', 'db_read']);

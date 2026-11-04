@@ -234,6 +234,25 @@ function resolveClosure(roots: string[]): Pkg[] {
 
 interface CpioEntry { name: string; mode: number; data: Buffer; rdev?: number }
 
+/**
+ * 精简规则：initramfs 会被整份解压进客户机内存，体积直接决定启动时间和内存占用。
+ * 这里去掉的都是「动态链接 + 正常编译」用不到的东西。
+ */
+const TRIM_PATTERNS: RegExp[] = [
+    /^\/usr\/bin\/lto-dump$/,          // 33MB，用不到
+    /^\/usr\/bin\/dwp$/,               // debug info 打包器
+    /^\/usr\/bin\/gcov/,
+    /^\/usr\/bin\/gcc-(ar|nm|ranlib)/,
+    /^\/usr\/libexec\/gcc\/.+\/(lto1|lto-wrapper|install-tools)/,
+    /^\/usr\/lib\/gcc\/.+\/plugin\//,
+    // 静态库（默认动态链接不需要）
+    /^\/usr\/lib\/lib(c|stdc\+\+|supc\+\+|gcc|gcc_eh|gomp|atomic|itm|ssp|quadmath|stdc\+\+fs)\.a$/,
+    // Python 里用不到的大块头
+    /^\/usr\/lib\/python3[^/]*\/(ensurepip|idlelib|tkinter|turtledemo|pydoc_data|test|lib2to3)\//,
+    /^\/usr\/lib\/python3[^/]*\/turtle\.py$/,
+    /^\/usr\/share\//,
+];
+
 function buildInitramfs(apks: { pkg: Pkg; file: string }[], dest: string): void {
     const entries: CpioEntry[] = [];
     const dirs = new Set<string>();
@@ -257,21 +276,42 @@ function buildInitramfs(apks: { pkg: Pkg; file: string }[], dest: string): void 
     for (const d of ['/', '/bin', '/sbin', '/lib', '/usr', '/usr/bin', '/usr/lib', '/usr/share',
         '/proc', '/sys', '/dev', '/tmp', '/mnt', '/mnt/9p', '/root']) addDir(d);
 
+    // apk 里会用硬链接（type '1'）共享同一个文件（比如 /usr/bin/g++ -> /usr/bin/c++），
+    // cpio 没有跨条目硬链接的概念，这里直接把目标内容复制一份。
+    const blobs = new Map<string, Buffer>();
+    const hardlinks: { name: string; target: string; mode: number }[] = [];
+
+    const ensureParents = (name: string): void => {
+        let parent = path.posix.dirname(name);
+        while (parent !== '/' && !dirs.has(parent)) {
+            addDir(parent);
+            parent = path.posix.dirname(parent);
+        }
+    };
+
     for (const { pkg, file } of apks) {
         const tar = untar(zlib.gunzipSync(fs.readFileSync(file)));
         for (const e of tar) {
             if (e.name.startsWith('.') || e.name.includes('/.')) continue; // .PKGINFO / .SIGN
             const name = `/${e.name}`;
-            let parent = path.posix.dirname(name);
-            while (parent !== '/' && !dirs.has(parent)) {
-                addDir(parent);
-                parent = path.posix.dirname(parent);
-            }
+            if (TRIM_PATTERNS.some(re => re.test(name))) continue;
+            ensureParents(name);
             if (e.type === '5') addDir(name);
             else if (e.type === '2') addLink(name, e.linkname);
-            else if (e.type === '0' || e.type === '\0' || e.type === '7') addFile(name, e.data, e.mode & 0o777);
+            else if (e.type === '1') {
+                hardlinks.push({ name, target: `/${e.linkname.replace(/^\.\//, '')}`, mode: e.mode & 0o777 });
+            } else if (e.type === '0' || e.type === '\0' || e.type === '7') {
+                addFile(name, e.data, e.mode & 0o777);
+                blobs.set(name, e.data);
+            }
         }
         log(`pack    ${pkg.name}-${pkg.version}`);
+    }
+
+    for (const link of hardlinks) {
+        const data = blobs.get(link.target);
+        if (data) addFile(link.name, data, link.mode);
+        else log(`warn    hardlink target missing: ${link.name} -> ${link.target}`);
     }
 
     addDev('/dev/console', 5, 1);
@@ -336,7 +376,8 @@ async function main(): Promise<void> {
     extractFromIso(path.join(OUT, 'linux4.iso'), 'boot/bzimage', path.join(OUT, 'bzimage'));
 
     await loadIndexes();
-    const closure = resolveClosure(['python3', 'busybox-static']);
+    // 客户机需要：python3（常驻评测守护进程）+ g++（C++ 编译）+ busybox
+    const closure = resolveClosure(['python3', 'busybox-static', 'g++']);
     log(`deps    ${closure.length} packages`);
 
     const apks: { pkg: Pkg; file: string }[] = [];

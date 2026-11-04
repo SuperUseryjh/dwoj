@@ -1,5 +1,7 @@
 import * as config from '../../config';
-import logger from '../logger';
+import { createLogger } from '../logger';
+
+const logger = createLogger('judge');
 
 // ============================================================
 // 评测结果类型（judge 与各执行后端共用）
@@ -83,7 +85,7 @@ export function resolveSandboxMode(): 'process' | 'v86' {
     resolvedMode = v86AssetsReady() ? 'v86' : 'process';
     if (resolvedMode === 'process') {
         logger.warn(
-            '[Judge] v86 sandbox assets not found in ' + config.V86_DIR +
+            'v86 sandbox assets not found in ' + config.V86_DIR +
             ', falling back to the process backend. User code will run with server privileges — ' +
             'run `bun run sandbox:setup` or set JUDGE_SANDBOX=v86 for isolation.'
         );
@@ -104,7 +106,13 @@ export function getBackend(): ExecutionBackend {
     if (backend) return backend;
 
     const mode = resolveSandboxMode();
-    if (mode === 'v86') {
+    // 默认把执行后端放到独立进程里（JUDGE_WORKER=0 可退回同进程，主要给测试用）
+    const useWorker = !['0', 'false', 'no'].includes(String(process.env.JUDGE_WORKER || '1').toLowerCase());
+
+    if (useWorker) {
+        const { RemoteBackend } = require('./remote_backend');
+        backend = new RemoteBackend(mode);
+    } else if (mode === 'v86') {
         const { V86Backend } = require('./v86_backend');
         backend = new V86Backend();
     } else {
@@ -114,8 +122,12 @@ export function getBackend(): ExecutionBackend {
     return backend!;
 }
 
-/** 测试用：重置单例 */
+/** 测试用：重置单例（顺带释放旧实例占用的进程/虚拟机） */
 export function resetBackend(mode?: 'process' | 'v86'): void {
+    const previous = backend;
     backend = null;
     resolvedMode = mode ?? null;
+    if (previous) {
+        void previous.dispose().catch(() => { /* ignore */ });
+    }
 }

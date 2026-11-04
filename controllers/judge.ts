@@ -2,7 +2,7 @@ import fs from 'fs-extra';
 import path from 'path';
 import * as config from '../config';
 import { query, queryOne, execute } from '../lib/database';
-import logger from '../lib/logger';
+import { createLogger } from '../lib/logger';
 import {
     JudgeError,
     JudgeErrorKind,
@@ -13,6 +13,8 @@ import {
 } from '../lib/judge/backend';
 import { compareOutput } from '../lib/judge/compare';
 import { clampTimeLimit, loadCases } from '../lib/judge/testcase';
+
+const logger = createLogger('judge');
 
 export { JudgeError, STATUS_TEXT } from '../lib/judge/backend';
 export type { JudgeErrorKind } from '../lib/judge/backend';
@@ -47,11 +49,11 @@ export async function initJudge(pluginManager: any): Promise<void> {
     cleanupStaleTmpDirs();
 
     const mode = resolveSandboxMode();
-    logger.info(`[Judge] backend=${getBackend().name} (JUDGE_SANDBOX=${config.JUDGE_SANDBOX})`);
+    logger.info(`backend=${getBackend().name} (JUDGE_SANDBOX=${config.JUDGE_SANDBOX})`);
 
     // 沙箱冷启动很慢（要解压 initramfs），提前在后台准备
     void getBackend().init().catch(err => {
-        logger.error(`[Judge] failed to initialize ${mode} backend`, err as Error);
+        logger.error(`failed to initialize ${mode} backend`, err as Error);
     });
 
     try {
@@ -61,11 +63,11 @@ export async function initJudge(pluginManager: any): Promise<void> {
         );
         if (stale.length > 0) {
             await execute("UPDATE submissions SET status = 'Pending' WHERE status IN ('Pending', 'Queued', 'Running')", []);
-            logger.info(`[Judge] Re-queued ${stale.length} unfinished submission(s).`);
+            logger.info(`Re-queued ${stale.length} unfinished submission(s).`);
             stale.forEach(row => enqueueJudge(row.id));
         }
     } catch (err) {
-        logger.error('[Judge] Failed to re-queue unfinished submissions', err as Error);
+        logger.error('Failed to re-queue unfinished submissions', err as Error);
     }
 }
 
@@ -81,7 +83,7 @@ function pump(): void {
         const id = pending.shift()!;
         activeIds.add(id);
         runJudge(id, pluginManagerRef)
-            .catch(err => logger.error(`[Judge] submission ${id} crashed`, err as Error))
+            .catch(err => logger.error(`submission ${id} crashed`, err as Error))
             .finally(() => {
                 activeIds.delete(id);
                 pump();
@@ -174,13 +176,13 @@ export async function runJudge(submissionId: number, pluginManager: any): Promis
         pluginManager?.emit?.('afterJudge', sub);
         await persist(sub);
 
-        logger.info(`[Judge] submission ${sub.id} -> ${sub.status} (${sub.caseResults.length} case(s))`);
+        logger.info(`submission ${sub.id} -> ${sub.status} (${sub.caseResults.length} case(s))`);
     } catch (err) {
         const kind = err instanceof JudgeError ? err.kind : 'SE';
         sub.status = STATUS_TEXT[kind];
         sub.errorInfo = sanitizeMessage((err as Error)?.message || String(err));
         await persist(sub);
-        logger.error(`[Judge] submission ${sub.id} -> ${sub.status}: ${sub.errorInfo}`);
+        logger.error(`submission ${sub.id} -> ${sub.status}: ${sub.errorInfo}`);
     }
 }
 
@@ -233,6 +235,6 @@ function cleanupStaleTmpDirs(): void {
             } catch (_) { /* ignore */ }
         }
     } catch (err) {
-        logger.error('[Judge] Failed to clean stale judge directories', err as Error);
+        logger.error('Failed to clean stale judge directories', err as Error);
     }
 }

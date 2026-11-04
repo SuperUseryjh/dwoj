@@ -1,7 +1,9 @@
 import fs from 'node:fs';
 import * as config from '../../config';
-import logger from '../logger';
+import { createLogger } from '../logger';
 import { resolveSandboxMode } from './backend';
+
+const logger = createLogger('judge');
 
 /**
  * 无隔离后端的启动风险确认。
@@ -100,7 +102,7 @@ export function confirmUnisolatedJudge(): boolean {
     if (!needsRiskAcknowledgement()) return true;
 
     if (envAcknowledged()) {
-        logger.warn(`[Judge] 评测后端为 process（无隔离），已通过 ${RISK_ACK_ENV}=1 跳过交互确认。`);
+        logger.warn(`评测后端为 process（无隔离），已通过 ${RISK_ACK_ENV}=1 跳过交互确认。`);
         return true;
     }
 
@@ -108,7 +110,7 @@ export function confirmUnisolatedJudge(): boolean {
     // 这里直接拒绝启动，避免无隔离模式被静默带上线。
     if (!process.stdin.isTTY) {
         logger.error(
-            '[Judge] 评测后端为 process（无隔离），但标准输入不是 TTY，无法完成风险确认，拒绝启动。\n' +
+            '评测后端为 process（无隔离），但标准输入不是 TTY，无法完成风险确认，拒绝启动。\n' +
             `若确认接受风险，请设置 ${RISK_ACK_ENV}=1 后重启，或配置 v86 沙箱资源。`
         );
         return false;
@@ -119,10 +121,10 @@ export function confirmUnisolatedJudge(): boolean {
 
     const answer = readLineSync().trim();
     if (answer === RISK_ACK_PHRASE) {
-        logger.warn('[Judge] 已确认：将以无隔离模式（process 后端）运行评测机。');
+        logger.warn('已确认：将以无隔离模式（process 后端）运行评测机。');
         return true;
     }
 
-    logger.error(`[Judge] 输入不匹配（需要逐字输入 "${RISK_ACK_PHRASE}"），拒绝启动。`);
+    logger.error(`输入不匹配（需要逐字输入 "${RISK_ACK_PHRASE}"），拒绝启动。`);
     return false;
 }

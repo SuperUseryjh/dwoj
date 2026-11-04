@@ -1,9 +1,12 @@
 import fs from 'fs-extra';
 import path from 'path';
 import * as config from '../config';
-import logger from './logger';
+import { createLogger } from './logger';
 import type { DriverKind, ExecuteResult, SqlDriver, SqlParams } from './db/driver';
 import { BunSqlDriver } from './db/bun_sql_driver';
+import { RemoteSqlDriver } from './db/remote_driver';
+
+const logger = createLogger('db');
 
 // ============================================================
 // 数据类型（与表结构对应，供各路由 / 控制器复用）
@@ -90,7 +93,18 @@ function sqliteUrl(): string {
     return `sqlite://${dbPath}`;
 }
 
+/**
+ * 是否运行在 http / judge 进程里。
+ * 这两种进程不直接连数据库，而是把 SQL 转发给 db 进程执行。
+ */
+function usesRemoteDriver(): boolean {
+    const role = process.env.DWOJ_PROCESS_ROLE;
+    return role === 'http' || role === 'judge';
+}
+
 function createDriver(): SqlDriver {
+    if (usesRemoteDriver()) return new RemoteSqlDriver();
+
     const kind = resolveDriverKind();
     if (kind === 'sqlite') {
         return new BunSqlDriver({ kind, url: sqliteUrl() });
@@ -152,6 +166,9 @@ function autoPk(): string {
  * 服务启动时 await 一次；重复执行是安全的（幂等）。
  */
 export async function initDb(): Promise<void> {
+    // 远程驱动模式下建表/迁移由 db 进程负责，这里不需要重复执行
+    if (driver instanceof RemoteSqlDriver) return;
+
     await driver.init();
 
     const pk = autoPk();

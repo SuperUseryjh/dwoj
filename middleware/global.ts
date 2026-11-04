@@ -1,9 +1,11 @@
 import MarkdownIt from 'markdown-it';
 import jwt from 'jsonwebtoken';
 import { queryOne } from '../lib/database';
-import logger from '../lib/logger';
+import { createLogger } from '../lib/logger';
 import * as config from '../config';
 import { ROLE_LV } from './auth';
+
+const logger = createLogger('http');
 
 const md = new MarkdownIt({
     html: false,

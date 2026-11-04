@@ -11,7 +11,7 @@ export const JWT_SECRET: string = process.env.JWT_SECRET || 'your_jwt_secret_key
 
 export const UPDATE_CHECK_URL: string = 'http://static.mr-onion-blog.fun/deploy/dwoj/dwoj.json';
 export const UPDATE_PACKAGE_URL: string = 'http://static.mr-onion-blog.fun/deploy/dwoj/dwoj.tar.gz';
-export const CURRENT_VERSION: string = '3.0.0';
+export const CURRENT_VERSION: string = '4.0.0';
 
 // ============================================================
 // 数据库配置
@@ -42,10 +42,17 @@ export const DB_POOL_MAX: number = Math.max(1, parseInt(process.env.DB_POOL_MAX 
 export const JUDGE_CONCURRENCY: number = Math.max(1, parseInt(process.env.JUDGE_CONCURRENCY || '2', 10) || 2);
 
 /** 支持的语言（前端下拉框 + 后端白名单，二者必须一致） */
-export const LANGUAGES: string[] = ['python', 'node'];
+export const LANGUAGES: string[] = ['python', 'node', 'cpp'];
 
 /** 语言 -> 展示名 */
-export const LANGUAGE_LABELS: Record<string, string> = { python: 'Python 3', node: 'Node.js (Bun)' };
+export const LANGUAGE_LABELS: Record<string, string> = {
+    python: 'Python 3',
+    node: 'Node.js (Bun)',
+    cpp: 'C++ (g++ -O2 -std=c++17)',
+};
+
+/** 编译超时（C++） */
+export const COMPILE_TIMEOUT_MS: number = Math.max(5000, parseInt(process.env.COMPILE_TIMEOUT_MS || '20000', 10) || 20000);
 
 /** 单个测试点默认时间限制（毫秒） */
 export const DEFAULT_TIME_LIMIT_MS: number = 1000;
@@ -82,11 +89,18 @@ export const V86_ASSETS = {
     initramfs: path.join(V86_DIR, 'initramfs.cpio.gz'),
 };
 
-/** 客户机内存（v86 只支持 32 位，且 initramfs 解压后约 40MB） */
-export const V86_MEMORY_MB: number = Math.max(64, parseInt(process.env.V86_MEMORY_MB || '192', 10) || 192);
+/**
+ * 客户机内存。
+ * initramfs 里带了 Python + g++，解压后约 250MB，所以至少要给 384MB；
+ * v86 不支持 PAE，32 位客户机上限约 2~3GB。
+ */
+export const V86_MEMORY_MB: number = Math.max(256, parseInt(process.env.V86_MEMORY_MB || '512', 10) || 512);
 
 /** 沙箱里支持的语言（Node.js 在模拟器里启动太慢，暂不支持） */
-export const V86_LANGUAGES: string[] = ['python'];
+export const V86_LANGUAGES: string[] = ['python', 'cpp'];
+
+/** 沙箱内的编译超时（模拟器里 g++ 很慢，给足时间） */
+export const V86_COMPILE_TIMEOUT_MS: number = Math.max(30000, parseInt(process.env.V86_COMPILE_TIMEOUT_MS || '180000', 10) || 180000);
 
 /** 冷启动（解压 initramfs + 起 linux）的超时 */
 export const V86_BOOT_TIMEOUT_MS: number = Math.max(60000, parseInt(process.env.V86_BOOT_TIMEOUT_MS || '180000', 10) || 180000);

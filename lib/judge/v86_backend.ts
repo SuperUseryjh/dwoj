@@ -1,39 +1,49 @@
 import crypto from 'crypto';
 import fs from 'fs-extra';
-import path from 'path';
 import * as config from '../../config';
-import logger from '../logger';
+import { createLogger } from '../logger';
 import { ExecuteOutcome, ExecuteRequest, ExecutionBackend, JudgeError } from './backend';
-import { GUEST_RUNNER } from './guest_runner';
+import { GUEST_DAEMON } from './guest_daemon';
+
+const logger = createLogger('v86');
 
 /**
  * v86 沙箱后端
  * ---------------------------------------------------------------------------
  * 把用户代码放进一台内嵌的 x86 虚拟机（v86，纯 WASM 实现的 PC 模拟器）里执行：
- *   - 客户机是 32 位 Alpine Linux（内核由 v86 官方测试镜像提取，4.16 i686），
+ *   - 客户机是 32 位 Alpine Linux（内核取自 v86 官方测试镜像，4.16 i686），
  *     v86 不支持 64 位内核、也不支持 PAE，因此只能用 32 位系统。
  *   - 客户机**没有网络设备**，看不到宿主机文件系统。
  *   - 宿主机与客户机之间只有两条通道：
- *       1. 串口（只用于发送 shell 命令 / 收执行状态标记）
- *       2. 9p 共享目录（只放当前这次评测的源码、输入、输出文件）
- *   - 用户程序在客户机里以 root 运行，但它破坏的只是这台一次性虚拟机；
- *     一旦客户机卡死就整台重建（优先从预热快照恢复，约 200ms）。
- *
- * 性能说明：模拟器里 Python 解释器启动约 1~2 秒，因此：
- *   - 单次执行的时间限制包含解释器启动开销；
- *   - 每个测试点的时间由客户机内的 runner 用 setitimer 计时并强制中断。
+ *       1. 串口：只用于启动守护进程、清理临时文件等控制命令
+ *       2. 9p 共享目录：源码、输入、输出、结果 JSON 都走这里
+ *   - 客户机里常驻一个 Python 守护进程（/mnt/9p/daemon.py）：
+ *       * Python 代码：fork 子进程 + exec，省掉解释器冷启动（约 1~2s → 100ms 量级）
+ *       * C++ 代码：g++ 编译一次（每个提交一次），然后每次 fork 出子进程跑二进制
+ *   - 用户程序以 root 运行，但它破坏的只是这台一次性虚拟机，卡死就整台重建。
  */
 
 type Emulator = any;
 
-/** 串口命令的兜底超时（不含用户程序时间） */
-const SHELL_TIMEOUT_MS = 30000;
+/** 串口控制命令的兜底超时（客户机刚启动时很慢） */
+const SHELL_TIMEOUT_MS = 90000;
+/** 等待守护进程就绪的上限 */
+const DAEMON_READY_TIMEOUT_MS = 180000;
+/** 轮询结果文件的间隔 */
+const POLL_INTERVAL_MS = 10;
+/** 最多缓存多少个提交的编译产物 */
+const MAX_COMPILED_SUBMISSIONS = 16;
 
 interface GuestResult {
     rc: number;
-    stdout: string;
-    stderr: string;
     timeMs?: number;
+    compileError?: string;
+    err?: string;
+}
+
+interface CompileEntry {
+    hash: string;
+    bin: string;
 }
 
 export class V86Backend implements ExecutionBackend {
@@ -46,6 +56,8 @@ export class V86Backend implements ExecutionBackend {
     private bootPromise: Promise<void> | null = null;
     private chain: Promise<unknown> = Promise.resolve();
     private executed = 0;
+    private usedBins = new Set<string>();
+    private compiled = new Map<number, CompileEntry>();
 
     // ------------------------------------------------------------
     // 生命周期
@@ -64,7 +76,7 @@ export class V86Backend implements ExecutionBackend {
             return { status: 'CE', message: `沙箱模式暂不支持该语言：${req.language}` };
         }
         // 同一时刻只允许一个用例占用虚拟机
-        const task = this.chain.then(() => this.executeExclusive(req));
+        const task = this.chain.then(() => this.runJob(req));
         this.chain = task.then(() => undefined, () => undefined);
         return task;
     }
@@ -73,88 +85,116 @@ export class V86Backend implements ExecutionBackend {
     // 单次执行
     // ------------------------------------------------------------
 
-    private async executeExclusive(req: ExecuteRequest): Promise<ExecuteOutcome> {
+    /** 串行执行一个用例（调用方保证不会并发进来） */
+    private async runJob(req: ExecuteRequest): Promise<ExecuteOutcome> {
         await this.ensureGuest();
 
         const tag = crypto.randomBytes(6).toString('hex');
-        const sol = `/sol_${tag}.py`;
-        const inp = `/in_${tag}.txt`;
-        const out = `/out_${tag}.txt`;
-        const err = `/err_${tag}.txt`;
-        const tm = `/time_${tag}.txt`;
+        const isCpp = req.language === 'cpp';
+        const src = isCpp ? `sol_${tag}.cpp` : `sol_${tag}.py`;
+        const inp = `in_${tag}.txt`;
+        const bin = `/tmp/bin_${req.submissionId ?? 'anon'}`;
+        const compile = isCpp && this.needsCompile(req, bin);
+        const limit = req.timeLimitMs;
+        const compileTimeout = config.V86_COMPILE_TIMEOUT_MS;
 
         try {
-            await this.writeGuestFile('/runner.py', GUEST_RUNNER);
-            await this.writeGuestFile(sol, req.code);
+            // 先写输入/源码/空结果文件，最后写 job 文件（守护进程以 job 文件出现为准）
+            await this.writeGuestFile(src, req.code);
             await this.writeGuestFile(inp, req.input);
-            for (const f of [out, err, tm]) await this.writeGuestFile(f, '');
+            for (const name of [`out_${tag}.txt`, `err_${tag}.txt`, `res_${tag}.json`]) {
+                await this.writeGuestFile(name, '');
+            }
+            await this.writeGuestFile(`job_${tag}.json`, JSON.stringify({
+                lang: req.language,
+                limit,
+                maxOut: req.maxOutputBytes,
+                compile,
+                src,
+                inp,
+                bin,
+                compileTimeoutMs: compileTimeout,
+                rmBins: this.drainStaleBins(),
+            }));
 
-            const limit = req.timeLimitMs;
-            const hard = limit + config.V86_RUN_GRACE_MS;
-            const script =
-                `python3 -I /mnt/9p/runner.py ${limit} ${req.maxOutputBytes}` +
-                ` /mnt/9p${sol} /tmp/o_${tag} /tmp/e_${tag}` +
-                ` /mnt/9p${out} /mnt/9p${err} /mnt/9p${tm}` +
-                ` < /mnt/9p${inp} > /tmp/o_${tag} 2> /tmp/e_${tag}; echo RC=$?`;
-
-            let rc: number;
-            try {
-                const reply = await this.shell(script, hard + SHELL_TIMEOUT_MS);
-                rc = parseRc(reply);
-            } catch (err2) {
-                // 客户机没在预期时间内回来，说明被用户代码卡死了
-                logger.warn(`[Judge/v86] guest unresponsive (${(err2 as Error).message}), recycling VM`);
+            const deadline = Date.now() + limit + config.V86_RUN_GRACE_MS + (compile ? compileTimeout : 0);
+            const ready = await this.waitForGuestFile(`ok_${tag}`, deadline);
+            if (!ready) {
+                logger.warn(`job ${tag} did not finish in time, recycling VM`);
                 await this.recycleGuest();
-                return { status: 'TLE', message: `运行超时（超过 ${req.timeLimitMs} ms）或客户机无响应` };
+                return { status: 'TLE', message: `运行超时（超过 ${limit} ms）或客户机无响应` };
             }
 
-            const [stdout, stderr, timeText] = await Promise.all([
-                this.readGuestFile(out),
-                this.readGuestFile(err),
-                this.readGuestFile(tm),
-            ]);
-            const timeMs = Number.parseInt(timeText.trim(), 10);
-
-            await this.cleanupGuestTmp(tag);
+            const result = await this.readGuestResult(tag);
+            const rc = result.rc;
+            const timeMs = Number(result.timeMs) || 0;
 
             if (rc === 0) {
-                return { status: 'OK', stdout, timeMs: Number.isFinite(timeMs) ? timeMs : 0 };
+                const stdout = await this.readGuestFile(`out_${tag}.txt`);
+                return { status: 'OK', stdout, timeMs };
+            }
+            if (rc === 123) {
+                const msg = result.compileError || (await this.readGuestFile(`err_${tag}.txt`)) || '编译/语法错误';
+                return { status: 'CE', message: msg.trim() };
             }
             if (rc === 124) {
-                return { status: 'TLE', message: `运行超时（超过 ${req.timeLimitMs} ms）`, timeMs: limit };
+                return { status: 'TLE', message: `运行超时（超过 ${limit} ms）`, timeMs };
             }
             if (rc === 125) {
                 return { status: 'OLE', message: `输出超过 ${req.maxOutputBytes} 字节` };
             }
-            if (rc === 123) {
-                return { status: 'CE', message: stderr.trim() || '语法错误' };
+            const stderr = await this.readGuestFile(`err_${tag}.txt`);
+            return { status: 'RE', message: stderr.trim() || result.err || `程序异常退出（退出码 ${rc}）`, timeMs };
+        } catch (err) {
+            if (err instanceof JudgeError) {
+                return { status: err.kind, message: err.message };
             }
-            if (rc < 0) {
-                return { status: 'SE', message: '沙箱未返回执行结果' };
+            return { status: 'SE', message: `沙箱错误：${(err as Error).message}` };
+        } finally {
+            this.executed++;
+            if (this.executed % 200 === 0) {
+                logger.info('recycling guest VM after 200 runs');
+                await this.recycleGuest();
             }
-            return { status: 'RE', message: stderr.trim() || `程序异常退出（退出码 ${rc}）`, timeMs };
-        } catch (err3) {
-            if (err3 instanceof JudgeError) {
-                return { status: err3.kind, message: err3.message };
-            }
-            return { status: 'SE', message: `沙箱错误：${(err3 as Error).message}` };
         }
     }
 
-    private async cleanupGuestTmp(tag: string): Promise<void> {
-        if (!this.booted) return;
+    /** 每个提交只编译一次 C++ */
+    private needsCompile(req: ExecuteRequest, bin: string): boolean {
+        const id = req.submissionId ?? -1;
+        const hash = crypto.createHash('sha1').update(req.code).digest('hex');
+        const entry = this.compiled.get(id);
+        if (entry && entry.hash === hash && entry.bin === bin) return false;
+        this.compiled.set(id, { hash, bin });
+        if (this.compiled.size > MAX_COMPILED_SUBMISSIONS) {
+            const oldest = this.compiled.keys().next().value as number;
+            const stale = this.compiled.get(oldest);
+            this.compiled.delete(oldest);
+            if (stale) this.usedBins.add(stale.bin);
+        }
+        return true;
+    }
+
+    /** 取出需要清理的旧编译产物（随下一个 job 一起交给守护进程删除） */
+    private drainStaleBins(): string[] {
+        if (this.usedBins.size === 0) return [];
+        const bins = [...this.usedBins];
+        this.usedBins.clear();
+        return bins;
+    }
+
+    private async readGuestResult(tag: string): Promise<GuestResult> {
+        const raw = await this.readGuestFile(`res_${tag}.json`);
         try {
-            await this.shell(
-                `rm -f /mnt/9p/sol_${tag}.py /mnt/9p/in_${tag}.txt /mnt/9p/out_${tag}.txt` +
-                ` /mnt/9p/err_${tag}.txt /mnt/9p/time_${tag}.txt /tmp/o_${tag} /tmp/e_${tag} 2>/dev/null`,
-                15000,
-            );
-        } catch (_) { /* 清理失败不影响判定 */ }
-        this.executed++;
-        // 每 200 次执行做一次重建，避免客户机状态漂移
-        if (this.executed % 200 === 0) {
-            logger.info('[Judge/v86] recycling guest VM after 200 runs');
-            await this.recycleGuest();
+            const parsed = JSON.parse(raw);
+            return {
+                rc: typeof parsed.rc === 'number' ? parsed.rc : -1,
+                timeMs: parsed.timeMs,
+                compileError: parsed.compileError,
+                err: parsed.err,
+            };
+        } catch (_) {
+            return { rc: -1 };
         }
     }
 
@@ -198,11 +238,12 @@ export class V86Backend implements ExecutionBackend {
         this.emulator = emulator;
         this.serial = '';
         this.booted = false;
+        this.usedBins.clear();
+        this.compiled.clear();
 
         emulator.add_listener('serial0-output-byte', (byte: number) => {
             const ch = String.fromCharCode(byte);
             if (ch !== '\r') this.serial += ch;
-            // 防止串口输出无限增长
             if (this.serial.length > 4 * 1024 * 1024) this.serial = this.serial.slice(-2 * 1024 * 1024);
         });
 
@@ -212,7 +253,7 @@ export class V86Backend implements ExecutionBackend {
         const ready = await this.waitFor('SANDBOX_READY', config.V86_BOOT_TIMEOUT_MS).then(
             () => true,
             (err: Error) => {
-                logger.warn(`[Judge/v86] boot wait failed: ${err.message}`);
+                logger.warn(`boot wait failed: ${err.message}`);
                 return false;
             },
         );
@@ -221,36 +262,90 @@ export class V86Backend implements ExecutionBackend {
             await this.destroyGuest();
             throw new JudgeError('SE', `沙箱启动失败（未在 ${config.V86_BOOT_TIMEOUT_MS} ms 内就绪）\n${tail}`);
         }
-        logger.info(`[Judge/v86] guest cold booted in ${Date.now() - startedAt} ms`);
+        logger.info(`guest cold booted in ${Date.now() - startedAt} ms`);
 
         await this.configureShell();
         this.booted = true;
 
-        // 预热（首次 import 会让模拟器从 initramfs 里读几十 MB，很慢）
-        try {
-            await this.shell('python3 -I -c pass', 120000);
-        } catch (err) {
-            logger.warn(`[Judge/v86] python warmup failed: ${(err as Error).message}`);
-        }
+        await this.startDaemon();
+        await this.warmup();
+        logger.info(`guest ready in ${Date.now() - startedAt} ms`);
     }
 
     /**
-     * 关闭回显和提示符，让串口只承载命令结果。
+     * 关闭回显和提示符，让串口只承载控制命令的结果。
      * 标记用 `printf '%s\n' __CFG""<nonce>__` 生成：
      * 命令本身被回显时是带引号的形式，不会和输出里的标记串混淆。
      */
     private async configureShell(): Promise<void> {
-        const nonce = crypto.randomBytes(4).toString('hex');
-        const marker = `__CFG${nonce}__`;
-        const from = this.serial.length;
-        this.send(`stty -echo; PS1=''; printf '%s\\n' __CFG""${nonce}__\n`);
-        await this.waitFor(marker, SHELL_TIMEOUT_MS, 1, from);
+        for (let attempt = 1; attempt <= 3; attempt++) {
+            const nonce = crypto.randomBytes(4).toString('hex');
+            const marker = `__CFG${nonce}__`;
+            const from = this.serial.length;
+            this.send(`stty -echo; PS1=''; printf '%s\\n' __CFG""${nonce}__\n`);
+            try {
+                await this.waitFor(marker, Math.floor(SHELL_TIMEOUT_MS / 2), 1, from);
+                return;
+            } catch (err) {
+                logger.warn(`shell setup attempt ${attempt} failed: ${(err as Error).message}`);
+                logger.warn(`serial tail: ${JSON.stringify(this.serial.slice(-300))}`);
+            }
+        }
+        throw new JudgeError('SE', '客户机 shell 无响应（串口无回显）');
+    }
+
+    /** 把常驻守护进程放到客户机里并启动 */
+    private async startDaemon(): Promise<void> {
+        await this.writeGuestFile('/daemon.py', GUEST_DAEMON);
+        await this.shell(
+            'rm -f /mnt/9p/daemon.ready; (python3 -I /mnt/9p/daemon.py > /tmp/daemon.log 2>&1 &)',
+            SHELL_TIMEOUT_MS,
+        );
+        logger.info('daemon launched, waiting for ready file');
+
+        const deadline = Date.now() + DAEMON_READY_TIMEOUT_MS;
+        while (Date.now() < deadline) {
+            const pid = await this.readGuestFile('/daemon.ready');
+            if (pid.trim()) {
+                logger.info(`daemon ready (pid ${pid.trim()})`);
+                return;
+            }
+            await sleep(POLL_INTERVAL_MS * 5);
+        }
+        const log = await this.readGuestFile('/daemon.log').catch(() => '');
+        throw new JudgeError('SE', `沙箱守护进程启动失败\n${log}`);
+    }
+
+    /** 预热：跑一个空 Python 程序 + 编译一个最小 C++ 程序（填充页缓存） */
+    private async warmup(): Promise<void> {
+        const startedAt = Date.now();
+
+        const python = await this.runJob({ language: 'python', code: 'pass', input: '', timeLimitMs: 5000, maxOutputBytes: 1024 });
+        if (python.status !== 'OK') {
+            logger.warn(`python warmup failed: ${python.status}`);
+        }
+
+        if (this.languages.includes('cpp')) {
+            const cpp = await this.runJob({
+                language: 'cpp',
+                code: '#include <cstdio>\nint main(){int a,b;if(scanf("%d %d",&a,&b)!=2)return 0;printf("%d\\n",a+b);return 0;}\n',
+                input: '1 2\n',
+                timeLimitMs: 5000,
+                maxOutputBytes: 1024,
+                submissionId: -1,
+            });
+            if (cpp.status !== 'OK') {
+                logger.warn(`c++ warmup failed: ${cpp.status} ${'message' in cpp ? cpp.message : ''}`);
+            }
+        }
+
+        logger.info(`warmup finished in ${Date.now() - startedAt} ms`);
     }
 
     private async recycleGuest(): Promise<void> {
         await this.destroyGuest();
         await this.ensureGuest().catch(err => {
-            logger.error('[Judge/v86] failed to restart guest', err as Error);
+            logger.error('failed to restart guest', err as Error);
         });
     }
 
@@ -339,16 +434,21 @@ export class V86Backend implements ExecutionBackend {
             return '';
         }
     }
+
+    /** 轮询等待客户机写出某个文件（内容非空即视为完成） */
+    private async waitForGuestFile(name: string, deadline: number): Promise<boolean> {
+        while (Date.now() < deadline) {
+            const content = await this.readGuestFile(name);
+            if (content.length > 0) return true;
+            await sleep(POLL_INTERVAL_MS);
+        }
+        return false;
+    }
 }
 
 // ------------------------------------------------------------
 // 工具函数
 // ------------------------------------------------------------
-
-function parseRc(reply: string): number {
-    const match = /RC=(-?\d+)/.exec(reply);
-    return match ? Number.parseInt(match[1], 10) : -1;
-}
 
 function toArrayBuffer(buffer: Buffer): ArrayBuffer {
     const copy = new Uint8Array(buffer.byteLength);

@@ -1,14 +1,17 @@
 import { queryOne } from '../lib/database';
-import logger from '../lib/logger';
+import { createLogger } from '../lib/logger';
+
+const logger = createLogger('http');
 
 export const ROLE_LV: Record<string, number> = { 'default': 0, 'super_user': 1, 'root': 2 };
 
-export function requireLogin(req: any, res: any, next: () => Promise<void>): void {
+export function requireLogin(req: any, res: any, next: () => Promise<void>): Promise<void> | void {
     if (!req.user) {
         res.redirect('/login');
         return;
     }
-    next();
+    // 必须把 next() 的 Promise 返回给框架，否则后续异步处理不会被 await
+    return next();
 }
 
 /**

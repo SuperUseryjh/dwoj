@@ -171,7 +171,10 @@ export class UploadHandler {
                     destination: this.dest,
                 };
             }
-            next();
+            // 必须把 next() 的 Promise 交回处理链，否则后面的异步处理
+            // （例如 await 数据库后的 res.send）会在响应构建之后才完成，
+            // 表现为 200 + 空响应体。
+            return next();
         };
     }
 }
@@ -234,7 +237,7 @@ export class App {
                 res._body = file;
                 res._sent = true;
             }
-            next();
+            return next();
         };
     }
 
