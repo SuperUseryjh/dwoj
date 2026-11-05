@@ -20,11 +20,29 @@ export const STATUS_TEXT: Record<JudgeErrorKind, string> = {
 
 export class JudgeError extends Error {
     kind: JudgeErrorKind;
-    constructor(kind: JudgeErrorKind, message: string) {
+    /**
+     * 管理员诊断信息（例如用户程序的 stderr）。
+     * **绝不能**进入面向普通用户的 message：隐藏测试点的输入可能被用户程序
+     * 原样写进 stderr，回显就等于泄露题面数据（issue #5）。
+     */
+    diagnostic?: string;
+    constructor(kind: JudgeErrorKind, message: string, diagnostic?: string) {
         super(message);
         this.name = 'JudgeError';
         this.kind = kind;
+        this.diagnostic = diagnostic;
     }
+}
+
+/**
+ * 运行期错误的**公开**文案：只包含退出码/信号，不含用户 stderr。
+ * 两个后端共用，避免切换后端后又把 stderr 回显出去。
+ */
+export function runtimeErrorMessage(code: number | null, signal?: string | null): string {
+    if (code === null && !signal) return '程序异常退出';
+    if (code === null) return `程序被信号 ${signal} 终止`;
+    if (signal) return `程序异常退出（退出码 ${code}，信号 ${signal}）`;
+    return `程序异常退出（退出码 ${code}）`;
 }
 
 /** 未结束的提交状态（启动时会被重新入队） */
@@ -45,7 +63,14 @@ export interface ExecuteRequest {
 
 export type ExecuteOutcome =
     | { status: 'OK'; stdout: string; timeMs: number }
-    | { status: JudgeErrorKind; message: string; timeMs?: number };
+    | {
+        status: JudgeErrorKind;
+        /** 面向普通用户的文案，不得包含用户 stderr / 隐藏测试输入 */
+        message: string;
+        /** 仅管理员可见的诊断信息（用户 stderr 等） */
+        diagnostic?: string;
+        timeMs?: number;
+    };
 
 export interface ExecutionBackend {
     /** 后端名字，用于日志 */

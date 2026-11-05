@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import fs from 'fs-extra';
 import * as config from '../../config';
 import { createLogger } from '../logger';
-import { ExecuteOutcome, ExecuteRequest, ExecutionBackend, JudgeError } from './backend';
+import { ExecuteOutcome, ExecuteRequest, ExecutionBackend, JudgeError, runtimeErrorMessage } from './backend';
 import { GUEST_DAEMON } from './guest_daemon';
 
 const logger = createLogger('v86');
@@ -44,6 +44,24 @@ interface GuestResult {
 interface CompileEntry {
     hash: string;
     bin: string;
+}
+
+/**
+ * 客户机返回码 → 结果类型。
+ *
+ * 安全约束（issue #5）：CE 只由 compileError 决定，绝不能用 "rc === 123"。
+ * 否则用户程序运行期 return 123 / os._exit(123) 就会被当成编译错误，
+ * 而 CE 的 message 是公开字段，stderr 里的隐藏测试输入会直接泄露。
+ */
+export function classifyGuestResult(
+    rc: number,
+    compileError?: string,
+): 'CE' | 'TLE' | 'OLE' | 'OK' | 'RE' {
+    if (compileError) return 'CE';
+    if (rc === 0) return 'OK';
+    if (rc === 124) return 'TLE';
+    if (rc === 125) return 'OLE';
+    return 'RE';
 }
 
 export class V86Backend implements ExecutionBackend {
@@ -129,26 +147,33 @@ export class V86Backend implements ExecutionBackend {
             const result = await this.readGuestResult(tag);
             const rc = result.rc;
             const timeMs = Number(result.timeMs) || 0;
+            const kind = classifyGuestResult(rc, result.compileError);
 
-            if (rc === 0) {
+            if (kind === 'CE') {
+                return { status: 'CE', message: String(result.compileError).trim() };
+            }
+            if (kind === 'OK') {
                 const stdout = await this.readGuestFile(`out_${tag}.txt`);
                 return { status: 'OK', stdout, timeMs };
             }
-            if (rc === 123) {
-                const msg = result.compileError || (await this.readGuestFile(`err_${tag}.txt`)) || '编译/语法错误';
-                return { status: 'CE', message: msg.trim() };
-            }
-            if (rc === 124) {
+            if (kind === 'TLE') {
                 return { status: 'TLE', message: `运行超时（超过 ${limit} ms）`, timeMs };
             }
-            if (rc === 125) {
+            if (kind === 'OLE') {
                 return { status: 'OLE', message: `输出超过 ${req.maxOutputBytes} 字节` };
             }
-            const stderr = await this.readGuestFile(`err_${tag}.txt`);
-            return { status: 'RE', message: stderr.trim() || result.err || `程序异常退出（退出码 ${rc}）`, timeMs };
+            // 同 process 后端：stderr 只能进管理员诊断字段，公开文案只给退出码。
+            // 用户程序可以把 stdin（隐藏测试输入）写进 stderr 再非零退出（issue #5）。
+            const stderr = (await this.readGuestFile(`err_${tag}.txt`)) || result.err || '';
+            return {
+                status: 'RE',
+                message: runtimeErrorMessage(rc),
+                diagnostic: stderr.trim(),
+                timeMs,
+            };
         } catch (err) {
             if (err instanceof JudgeError) {
-                return { status: err.kind, message: err.message };
+                return { status: err.kind, message: err.message, diagnostic: err.diagnostic };
             }
             return { status: 'SE', message: `沙箱错误：${(err as Error).message}` };
         } finally {

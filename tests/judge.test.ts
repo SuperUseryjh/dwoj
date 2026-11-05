@@ -153,9 +153,13 @@ describe('judge / sandboxed execution', () => {
         await expect(executeProgram('python', 'while True:\n    pass', '', 500)).rejects.toThrow(/超时/);
     });
 
-    test('classifies crashing programs as Runtime Error', async () => {
+    test('classifies crashing programs as Runtime Error without echoing stderr', async () => {
         if (!HAS_PYTHON) return;
-        await expect(executeProgram('python', 'raise SystemError("boom")', '', 3000)).rejects.toThrow(/boom/);
+        // issue #5：stderr 里可能有隐藏测试输入，只能进 diagnostic，不能进公开 message
+        const err = await executeProgram('python', 'raise SystemError("boom")', '', 3000).catch(e => e);
+        expect(err).toMatchObject({ kind: 'RE' });
+        expect(err.message).not.toContain('boom');
+        expect(err.diagnostic).toContain('boom');
     });
 
     test('does not crash when the program never reads stdin', async () => {

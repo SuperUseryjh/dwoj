@@ -4,7 +4,7 @@ import fs from 'fs-extra';
 import path from 'path';
 import * as config from '../../config';
 import { createLogger } from '../logger';
-import { ExecuteOutcome, ExecuteRequest, ExecutionBackend, JudgeError, JudgeErrorKind } from './backend';
+import { ExecuteOutcome, ExecuteRequest, ExecutionBackend, JudgeError, JudgeErrorKind, runtimeErrorMessage } from './backend';
 
 const logger = createLogger('judge');
 
@@ -262,7 +262,12 @@ export class ProcessBackend implements ExecutionBackend {
             return { status: 'OK', stdout, timeMs: Date.now() - startedAt };
         } catch (err) {
             const je = toJudgeError(err);
-            return { status: je.kind, message: je.message, timeMs: Date.now() - startedAt };
+            return {
+                status: je.kind,
+                message: je.message,
+                diagnostic: je.diagnostic,
+                timeMs: Date.now() - startedAt,
+            };
         }
     }
 }
@@ -347,10 +352,12 @@ export async function executeProgram(
             throw new JudgeError('OLE', `输出超过 ${maxOutputBytes} 字节`);
         }
         if (result.code !== 0 || result.signal) {
-            const detail = result.stderr.trim();
+            // 公开文案里绝不能带 stderr：用户可以把 stdin（隐藏测试输入）写进 stderr，
+            // 再主动非零退出，从而在提交详情页把自己的输入读出来（issue #5）。
             throw new JudgeError(
                 'RE',
-                detail || `程序异常退出（退出码 ${result.code}${result.signal ? `，信号 ${result.signal}` : ''}）`,
+                runtimeErrorMessage(result.code, result.signal),
+                result.stderr.trim(),
             );
         }
         return result.stdout;

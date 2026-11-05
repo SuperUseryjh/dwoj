@@ -75,7 +75,10 @@ export interface Submission {
     time: string;
     caseResults: any[];
     result?: string;
+    /** 公开错误信息（所有人可见） */
     errorInfo?: string;
+    /** 管理员诊断信息（用户 stderr，仅 super_user / root 可见） */
+    errorDetail?: string;
 }
 
 export interface User {

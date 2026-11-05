@@ -163,7 +163,7 @@ router.post('/submission/:id/rejudge', requireRole('super_user'), async (req, re
             res.status(409).send('该提交正在评测中，请稍后再试');
             return;
         }
-        await execute("UPDATE submissions SET status = 'Pending', errorInfo = NULL, caseResults = '[]' WHERE id = ?", [sub.id]);
+        await execute("UPDATE submissions SET status = 'Pending', errorInfo = NULL, errorDetail = NULL, caseResults = '[]' WHERE id = ?", [sub.id]);
         enqueueJudge(sub.id);
         res.redirect(`/submission/${sub.id}`);
     } catch (err) {
@@ -215,7 +215,11 @@ router.get('/submission/:id', requireLogin, async (req, res, next) => {
                 sub.caseResults = [];
             }
         }
-        res.render('submission', { sub });
+        // issue #5：用户 stderr / 隐藏测试输入只允许管理员（super_user / root）查看。
+        // 这里在渲染前直接抹掉，避免视图模板漏判导致越权回显。
+        const canViewDiagnostics = (ROLE_LV[userRole?.role || 'default'] ?? -1) >= (ROLE_LV['super_user'] ?? 1);
+        if (!canViewDiagnostics) sub.errorDetail = null;
+        res.render('submission', { sub, canViewDiagnostics });
     } catch (err) {
         logger.error('Error fetching submission details', err as Error);
         res.status(500).send('服务器错误');

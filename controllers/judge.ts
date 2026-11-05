@@ -103,6 +103,7 @@ export async function runJudge(submissionId: number, pluginManager: any): Promis
 
     sub.caseResults = [];
     sub.errorInfo = null;
+    sub.errorDetail = null;
 
     const problem = await queryOne<{ id: number; timeLimit: number | null }>(
         "SELECT id, timeLimit FROM problems WHERE id = ?", [sub.problemId]
@@ -160,7 +161,12 @@ export async function runJudge(submissionId: number, pluginManager: any): Promis
             } else {
                 const kind: JudgeErrorKind = outcome.status;
                 sub.caseResults.push({ name: testCase.name, status: kind });
+                // 公开字段：后端已经保证 message 里没有用户 stderr（issue #5）
                 sub.errorInfo = `测试点 ${testCase.name}: ${sanitizeMessage(outcome.message)}`;
+                // 管理员诊断字段：保存用户 stderr，只给 super_user / root 看
+                sub.errorDetail = outcome.diagnostic
+                    ? sanitizeMessage(outcome.diagnostic).slice(0, 4000)
+                    : null;
                 verdict = STATUS_TEXT[kind];
             }
 
@@ -181,6 +187,9 @@ export async function runJudge(submissionId: number, pluginManager: any): Promis
         const kind = err instanceof JudgeError ? err.kind : 'SE';
         sub.status = STATUS_TEXT[kind];
         sub.errorInfo = sanitizeMessage((err as Error)?.message || String(err));
+        sub.errorDetail = err instanceof JudgeError && err.diagnostic
+            ? sanitizeMessage(err.diagnostic).slice(0, 4000)
+            : null;
         await persist(sub);
         logger.error(`submission ${sub.id} -> ${sub.status}: ${sub.errorInfo}`);
     }
@@ -188,8 +197,8 @@ export async function runJudge(submissionId: number, pluginManager: any): Promis
 
 async function persist(sub: any): Promise<void> {
     await execute(
-        "UPDATE submissions SET status = ?, errorInfo = ?, caseResults = ? WHERE id = ?",
-        [sub.status, sub.errorInfo || null, JSON.stringify(sub.caseResults || []), sub.id]
+        "UPDATE submissions SET status = ?, errorInfo = ?, errorDetail = ?, caseResults = ? WHERE id = ?",
+        [sub.status, sub.errorInfo || null, sub.errorDetail || null, JSON.stringify(sub.caseResults || []), sub.id]
     );
 }
 

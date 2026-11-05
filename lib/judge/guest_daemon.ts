@@ -375,7 +375,10 @@ def handle(tag):
     lang = job.get("lang")
     ext = "cpp" if lang == "cpp" else "py"
     shutil.copyfile(os.path.join(RES, job["src"]), os.path.join(work, "main." + ext))
-    shutil.copyfile(os.path.join(RES, job["inp"]), os.path.join(work, "input.txt"))
+    # 输入先读进内存并从 9p 删除，**等编译结束**才落到 work 目录。
+    # 否则用户可以在 C++ 源码里 #include "input.txt"，让编译器的报错
+    # 原样带出隐藏测试输入（CE 是公开字段，issue #5 的同类通道）。
+    input_data = read_bytes(os.path.join(RES, job["inp"]))
     # 源码/输入已经从共享目录取走，立刻删掉，9p 上只留结果文件
     for name in (job["src"], job["inp"]):
         try:
@@ -401,6 +404,19 @@ def handle(tag):
                 except Exception:
                     shutil.copyfile(OJR + bin_rel, target)
                 os.chmod(target, 0o755)
+
+        # Python 的语法错误在父进程里预检，用 compileError 上报（CE）。
+        # 不能依赖子进程退出码 123：用户代码可以自己 os._exit(123)，
+        # 那样会把 stderr 伪装成编译错误（issue #5）。
+        if rc == 0 and lang != "cpp":
+            try:
+                compile(read_bytes(os.path.join(work, "main.py")), "main.py", "exec")
+            except SyntaxError:
+                compile_error = traceback.format_exc()[:MAX_STDERR]
+                rc = 123
+
+        # 编译完成后再把 stdin 落到 work 目录，编译期不可见
+        write_bytes(os.path.join(work, "input.txt"), input_data)
 
         if rc == 0:
             rc, elapsed, out, err = run_case(tag, job, work)

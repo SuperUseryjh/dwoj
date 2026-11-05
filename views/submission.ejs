@@ -23,6 +23,14 @@
     </div>
 <% } %>
 
+<%# 用户 stderr 可能包含隐藏测试输入，只给管理员看（issue #5） %>
+<% if (canViewDiagnostics && sub.errorDetail) { %>
+    <div class="alert alert-warning">
+        <strong>诊断信息（仅管理员可见）:</strong>
+        <pre class="mb-0 mt-2"><%= sub.errorDetail %></pre>
+    </div>
+<% } %>
+
 <% if (sub.caseResults && sub.caseResults.length > 0) { %>
     <h4>测试点详情</h4>
     <div class="row">

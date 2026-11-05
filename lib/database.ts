@@ -40,7 +40,10 @@ export interface Submission {
     status: string | null;
     time: string | null;
     caseResults: string | null;
+    /** 公开错误信息（所有能查看该提交的人可见） */
     errorInfo?: string | null;
+    /** 管理员诊断信息（用户 stderr 等，仅 super_user / root 可见） */
+    errorDetail?: string | null;
 }
 
 export interface DiscussNode {
@@ -236,6 +239,11 @@ export async function initDb(): Promise<void> {
     if (!submissionColumns.includes('errorInfo')) {
         await driver.execute('ALTER TABLE submissions ADD COLUMN errorInfo TEXT');
         logger.info('Migration applied: submissions.errorInfo column added.');
+    }
+    // ---- 幂等迁移：管理员诊断字段（issue #5：用户 stderr 不再公开回显） ----
+    if (!submissionColumns.includes('errorDetail')) {
+        await driver.execute('ALTER TABLE submissions ADD COLUMN errorDetail TEXT');
+        logger.info('Migration applied: submissions.errorDetail column added.');
     }
 
     // 索引：方言语法一致，直接建

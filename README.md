@@ -262,6 +262,10 @@ JUDGE_SANDBOX=v86 bun app.ts
   `V86_MEMORY_MB` 默认 512（小于 512 会导致内核解压 initramfs 失败）。
 - 沙箱跑在独立的 `judge` 进程里（见「进程模型」），broker 和 HTTP 进程都不持有
   虚拟机的 WASM 内存；judge 崩溃后 broker 会自动重启它并重新排队未完成的提交。
+- **运行错误不回显用户 stderr**：用户程序可以把当前测试点的 stdin（未公开测试输入）
+  写进 stderr 再非零退出；因此 `Runtime Error` 的公开信息只有退出码/信号，
+  用户 stderr 单独存入 `submissions.errorDetail`，仅 `super_user` / `root`
+  在提交详情页可见（普通用户、process 后端、v86 后端统一策略）。
 - 限制：**沙箱模式不支持 Node.js**（会被判为 `Compile Error` 并提示支持列表）；
   C++ 编译时间也算在提交里，适合练手/内网场景，不适合严格的竞赛计时。
 - 不想用虚拟机时设 `JUDGE_SANDBOX=process`，用户代码会以 **服务器进程权限** 直接执行，
