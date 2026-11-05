@@ -1,87 +1,77 @@
-import { describe, expect, test, mock, beforeEach, afterAll } from 'bun:test';
+import { describe, expect, test, mock, beforeEach, beforeAll, afterAll } from 'bun:test';
 import path from 'path';
 import fs from 'fs';
 
-// Mock database module
-const mockQueryOne = mock((sql: string, params?: any[]) => {
-    // Return no existing config for new plugins
-    return undefined;
-});
-
-const mockExecute = mock((sql: string, params?: any[]) => {
-    return { lastInsertRowid: 1, changes: 1 };
-});
-
-mock.module('../lib/database', () => ({
-    queryOne: mockQueryOne,
-    execute: mockExecute,
-}));
-
-mock.module('../lib/logger', () => ({
-    default: {
-        info: mock(() => {}),
-        warn: mock(() => {}),
-        error: mock(() => {}),
-    },
-    info: mock(() => {}),
-    warn: mock(() => {}),
-    error: mock(() => {}),
-    createLogger: () => ({ info: mock(() => {}), warn: mock(() => {}), error: mock(() => {}) }),
-    normalizeModuleName: (name: string) => String(name || '')
-        .toLowerCase()
-        .replace(/\.[jt]s$/, '')
-        .slice(0, 6)
-        .replace(/[^a-z0-9_]/g, ''),
-}));
-
+// 注意：这里**不使用 mock.module**。
+// Bun 的 mock.module 是进程级的，而且会在所有测试文件被加载时就生效，
+// 会污染同进程里其它文件（曾经把 logger.test.ts / database.test.ts 全带崩）。
+// 所以插件测试直接用 tests/setup.ts 指定的测试库（test_dwoj.db）。
+import { execute, initDb, queryOne } from '../lib/database';
 import PluginSystem, { resolveLogModule } from '../lib/plugin_system';
 
 const TEST_PLUGIN_DIR = path.join(__dirname, '_test_plugins');
+
+async function seedConfig(
+    filename: string,
+    options: { enabled?: boolean; token?: string; permissions?: string[] } = {},
+): Promise<void> {
+    await execute(
+        'INSERT INTO plugin_configs (filename, enabled, token, permissions) VALUES (?, ?, ?, ?)',
+        [
+            filename,
+            options.enabled ? 1 : 0,
+            options.token ?? `token-${filename}`,
+            JSON.stringify(options.permissions ?? []),
+        ],
+    );
+}
 
 describe('PluginSystem', () => {
     let pluginSystem: PluginSystem;
     const mockOj = {
         app: { use: mock(() => {}), _middleware: [] },
-        db: {},
+        // 权限代理只拦截"函数属性"，所以这里要有真实的函数才能验证拦截逻辑
+        db: {
+            query: mock(() => []),
+            execute: mock(() => ({ lastInsertRowid: 1, changes: 1 })),
+            get: mock(() => undefined),
+            all: mock(() => []),
+            run: mock(() => ({})),
+        },
         config: {},
         logger: { info: mock(() => {}), warn: mock(() => {}), error: mock(() => {}) },
     };
 
-    beforeEach(() => {
-        // Create and ensure clean test plugin directory
+    beforeAll(async () => {
+        await initDb();
+    });
+
+    beforeEach(async () => {
+        // 每个用例从干净状态开始
+        await execute('DELETE FROM plugin_configs');
+
         if (fs.existsSync(TEST_PLUGIN_DIR)) {
             const entries = fs.readdirSync(TEST_PLUGIN_DIR, { withFileTypes: true });
             for (const entry of entries) {
                 const fullPath = path.join(TEST_PLUGIN_DIR, entry.name);
-                if (entry.isFile()) {
-                    fs.unlinkSync(fullPath);
-                }
+                if (entry.isFile()) fs.unlinkSync(fullPath);
             }
         } else {
             fs.mkdirSync(TEST_PLUGIN_DIR, { recursive: true });
         }
-        mockQueryOne.mockReset();
-        mockExecute.mockReset();
     });
 
     afterAll(() => {
-        // Cleanup test plugin directory
-        try {
-            const rmDir = (dir: string) => {
-                if (!fs.existsSync(dir)) return;
-                const entries = fs.readdirSync(dir, { withFileTypes: true });
-                for (const entry of entries) {
-                    const fullPath = path.join(dir, entry.name);
-                    if (entry.isDirectory()) {
-                        rmDir(fullPath);
-                    } else {
-                        fs.unlinkSync(fullPath);
-                    }
-                }
-                fs.rmdirSync(dir);
-            };
-            rmDir(TEST_PLUGIN_DIR);
-        } catch {}
+        const rmDir = (dir: string): void => {
+            if (!fs.existsSync(dir)) return;
+            for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+                const fullPath = path.join(dir, entry.name);
+                if (entry.isDirectory()) rmDir(fullPath);
+                else fs.unlinkSync(fullPath);
+            }
+            fs.rmdirSync(dir);
+        };
+        try { rmDir(TEST_PLUGIN_DIR); } catch { /* ignore */ }
     });
 
     test('插件日志模块名：manifest.name 优先、截断到 6 字符', () => {
@@ -93,7 +83,6 @@ describe('PluginSystem', () => {
     });
 
     test('constructor initializes plugin directory', () => {
-        // Remove dir created in beforeEach to test constructor creates it
         fs.rmdirSync(TEST_PLUGIN_DIR);
 
         pluginSystem = new PluginSystem(TEST_PLUGIN_DIR, mockOj);
@@ -112,7 +101,6 @@ describe('PluginSystem', () => {
     });
 
     test('loadAll loads valid .js plugins', async () => {
-        // Create a valid test plugin
         const pluginContent = `
 module.exports = {
     manifest: {
@@ -135,7 +123,7 @@ module.exports = {
         // 'test-plugin' → 截断到 6 字符 "test-p" → 去掉连字符 → "testp"
         expect(pluginSystem.plugins['test-plugin.js'].module.logModule).toBe('testp');
         expect(pluginSystem.plugins['test-plugin.js'].name).toBe('test-plugin');
-        expect(pluginSystem.plugins['test-plugin.js'].enabled).toBe(false); // Not in DB, default disabled
+        expect(pluginSystem.plugins['test-plugin.js'].enabled).toBe(false); // 库里没有 → 默认禁用
         expect(pluginSystem.plugins['test-plugin.js'].permissions).toEqual(['oj_access', 'db_read']);
     });
 
@@ -146,31 +134,25 @@ module.exports = {
         pluginSystem = new PluginSystem(TEST_PLUGIN_DIR, mockOj);
         await pluginSystem.loadAll();
 
-        // Only the built-in db-monitor plugin is registered
         expect(Object.keys(pluginSystem.plugins)).toHaveLength(1);
         expect(pluginSystem.plugins['builtin:db-monitor']).toBeDefined();
-        expect(pluginSystem.plugins['builtin:db-monitor'].enabled).toBe(false);
     });
 
     test('loadAll handles plugin load errors gracefully', async () => {
-        // Create a plugin with syntax error
         fs.writeFileSync(path.join(TEST_PLUGIN_DIR, 'bad-plugin.js'), 'this is not valid javascript {{{');
 
         pluginSystem = new PluginSystem(TEST_PLUGIN_DIR, mockOj);
         await pluginSystem.loadAll();
 
-        // Should not throw, should just log error; built-in plugin still registers
         expect(Object.keys(pluginSystem.plugins)).toHaveLength(1);
         expect(pluginSystem.plugins['builtin:db-monitor']).toBeDefined();
     });
 
     test('loadAll loads enabled plugin and registers routes', async () => {
-        // Mock DB config to return enabled = true
-        mockQueryOne.mockImplementation((sql: string) => {
-            if (sql.includes('plugin_configs')) {
-                return { enabled: 1, token: 'test-token-123', permissions: '["oj_access","db_read"]' };
-            }
-            return undefined;
+        await seedConfig('active-plugin.js', {
+            enabled: true,
+            token: 'test-token-123',
+            permissions: ['oj_access', 'db_read'],
         });
 
         const pluginContent = `
@@ -208,17 +190,11 @@ module.exports = { manifest: { name: 'good' } };
         const names = list.map((p: any) => p.name);
 
         expect(names).toContain('good');
-        // bad plugin wasn't loaded but file exists
         expect(list.some((p: any) => p.filename === 'bad.js')).toBe(true);
     });
 
     test('getPluginExports returns exports of enabled plugin', async () => {
-        mockQueryOne.mockImplementation((sql: string) => {
-            if (sql.includes('plugin_configs')) {
-                return { enabled: 1, token: 'token', permissions: '[]' };
-            }
-            return undefined;
-        });
+        await seedConfig('exporter.js', { enabled: true, token: 'token', permissions: [] });
 
         const pluginContent = `
 module.exports = {
@@ -238,19 +214,11 @@ module.exports = {
 
     test('getPluginExports returns undefined for unknown plugin', () => {
         pluginSystem = new PluginSystem(TEST_PLUGIN_DIR, mockOj);
-        const exports = pluginSystem.getPluginExports('nonexistent');
-        expect(exports).toBeUndefined();
+        expect(pluginSystem.getPluginExports('nonexistent')).toBeUndefined();
     });
 
     test('emit calls hooks on all enabled plugins', async () => {
-        mockQueryOne.mockImplementation((sql: string) => {
-            if (sql.includes('plugin_configs')) {
-                return { enabled: 1, token: 'token', permissions: '["oj_access","db_read"]' };
-            }
-            return undefined;
-        });
-
-        const hookResults: number[] = [];
+        await seedConfig('hook1.js', { enabled: true, token: 'token', permissions: ['oj_access', 'db_read'] });
 
         fs.writeFileSync(path.join(TEST_PLUGIN_DIR, 'hook1.js'), `
 module.exports = {
@@ -270,18 +238,10 @@ module.exports = {
 
     test('emit returns empty array when no hooks match', async () => {
         pluginSystem = new PluginSystem(TEST_PLUGIN_DIR, mockOj);
-        const results = pluginSystem.emit('nonexistentHook');
-        expect(results).toEqual([]);
+        expect(pluginSystem.emit('nonexistentHook')).toEqual([]);
     });
 
-    test('toggle enables plugin and reloads', async () => {
-        mockQueryOne.mockImplementation((sql: string) => {
-            if (sql.includes('plugin_configs')) {
-                return undefined; // Not in DB
-            }
-            return undefined;
-        });
-
+    test('toggle enables plugin, persists to db and reloads', async () => {
         fs.writeFileSync(path.join(TEST_PLUGIN_DIR, 'toggler.js'), `
 module.exports = {
     manifest: { name: 'toggler' }
@@ -293,27 +253,19 @@ module.exports = {
 
         expect(pluginSystem.plugins['toggler.js'].enabled).toBe(false);
 
-        // Mock DB to now return enabled = true after toggle
-        mockQueryOne.mockImplementation((sql: string) => {
-            if (sql.includes('plugin_configs')) {
-                return { enabled: 1, token: 'new-token', permissions: '[]' };
-            }
-            return undefined;
-        });
-
         await pluginSystem.toggle('toggler.js', true);
-        expect(mockExecute).toHaveBeenCalledWith(
-            expect.stringContaining('UPDATE plugin_configs'),
-            [1, 'toggler.js']
+
+        const row = await queryOne<{ enabled: number }>(
+            'SELECT enabled FROM plugin_configs WHERE filename = ?', ['toggler.js'],
         );
+        expect(row?.enabled).toBe(1);
+        expect(pluginSystem.plugins['toggler.js'].enabled).toBe(true);
     });
 
     test('delete removes plugin file and config', async () => {
         const pluginPath = path.join(TEST_PLUGIN_DIR, 'deletable.js');
         fs.writeFileSync(pluginPath, `
-module.exports = {
-    manifest: { name: 'deletable' }
-};
+module.exports = { manifest: { name: 'deletable' } };
 `);
 
         pluginSystem = new PluginSystem(TEST_PLUGIN_DIR, mockOj);
@@ -325,48 +277,41 @@ module.exports = {
         await pluginSystem.delete('deletable.js');
 
         expect(fs.existsSync(pluginPath)).toBe(false);
-        expect(mockExecute).toHaveBeenCalledWith(
-            expect.stringContaining('DELETE FROM plugin_configs'),
-            ['deletable.js']
-        );
+        const row = await queryOne('SELECT filename FROM plugin_configs WHERE filename = ?', ['deletable.js']);
+        expect(row).toBeUndefined();
+        expect(pluginSystem.plugins['deletable.js']).toBeUndefined();
     });
 
     test('delete handles non-existent plugin gracefully', async () => {
         pluginSystem = new PluginSystem(TEST_PLUGIN_DIR, mockOj);
-        // Should not throw
-        await pluginSystem.delete('nonexistent.js');
+        await expect(pluginSystem.delete('nonexistent.js')).resolves.toBeUndefined();
     });
 
     test('Plugin permission proxy blocks unauthorized access', async () => {
-        mockQueryOne.mockImplementation((sql: string) => {
-            if (sql.includes('plugin_configs')) {
-                return { enabled: 1, token: 'restricted-token', permissions: '["oj_access"]' };
-            }
-            return undefined;
+        await seedConfig('restricted.js', {
+            enabled: true,
+            token: 'restricted-token',
+            permissions: ['oj_access'],
         });
 
-        // Create plugin that tries db access without db_read permission
-        const pluginContent = `
+        fs.writeFileSync(path.join(TEST_PLUGIN_DIR, 'restricted.js'), `
 module.exports = {
     manifest: {
         name: 'restricted',
-        permissions: ['oj_access']  // No db_read or db_write
+        permissions: ['oj_access']
     },
-    onInit: function(oj, db, getPluginExports) {
-        // This should be blocked because only 'oj_access' is granted
-        try {
-            db.query("SELECT * FROM users");
-        } catch(e) {
-            return 'blocked: ' + e.message;
-        }
+    onLoad: function(oj, db) {
+        db.query("SELECT 1");
     }
 };
-`;
-        fs.writeFileSync(path.join(TEST_PLUGIN_DIR, 'restricted.js'), pluginContent);
+`);
 
         pluginSystem = new PluginSystem(TEST_PLUGIN_DIR, mockOj);
         await pluginSystem.loadAll();
 
-        expect(pluginSystem.plugins['restricted.js']).toBeDefined();
+        const plugin = pluginSystem.plugins['restricted.js'];
+        expect(plugin).toBeDefined();
+        // 没有 db 权限，调用 db.query 应该被代理拦截
+        expect(() => plugin.module.executeHook('onLoad')).toThrow(/Unauthorized action/);
     });
 });

@@ -214,6 +214,9 @@ function sanitizeMessage(message: string): string {
         text = text.split(dir + path.sep).join('');
         text = text.split(dir).join('<path>');
     }
+
+    // 沙箱客户机里的路径也不该回显给用户（例如 CE 里的 /mnt/9p/sol_xxx.cpp）
+    text = text.replace(/(?:\/mnt\/9p|\/srv\/ojroot)(?:\/[^\s:'"`]*)?\/?/g, '');
     return text.split('\n').slice(0, 20).join('\n').trim();
 }
 

@@ -93,7 +93,8 @@ export class V86Backend implements ExecutionBackend {
         const isCpp = req.language === 'cpp';
         const src = isCpp ? `sol_${tag}.cpp` : `sol_${tag}.py`;
         const inp = `in_${tag}.txt`;
-        const bin = `/tmp/bin_${req.submissionId ?? 'anon'}`;
+        // 沙箱内的编译产物（仅 root 可访问；每次运行时硬链接到私有 work 目录）
+        const bin = `/opt/bin/prog_${req.submissionId ?? 'anon'}`;
         const compile = isCpp && this.needsCompile(req, bin);
         const limit = req.timeLimitMs;
         const compileTimeout = config.V86_COMPILE_TIMEOUT_MS;
@@ -312,8 +313,9 @@ export class V86Backend implements ExecutionBackend {
             }
             await sleep(POLL_INTERVAL_MS * 5);
         }
+        const failure = await this.readGuestFile('/daemon.error').catch(() => '');
         const log = await this.readGuestFile('/daemon.log').catch(() => '');
-        throw new JudgeError('SE', `沙箱守护进程启动失败\n${log}`);
+        throw new JudgeError('SE', `沙箱守护进程启动失败\n${failure || log}`);
     }
 
     /** 预热：跑一个空 Python 程序 + 编译一个最小 C++ 程序（填充页缓存） */

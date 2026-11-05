@@ -1,27 +1,12 @@
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import fs from 'fs-extra';
-import path from 'path';
+import { beforeAll, describe, expect, test } from 'bun:test';
 
-process.env.DWOJ_DB_NAME = 'test_dwoj.db';
-
-import { initDb, query, queryOne, execute, closeDb, dialect, upsertSql } from '../lib/database';
-
-const testDbPath = path.join(__dirname, '..', 'data', 'test_dwoj.db');
-
-function removeDbFiles(): void {
-    for (const suffix of ['', '-wal', '-shm']) {
-        fs.removeSync(testDbPath + suffix);
-    }
-}
+// 测试库名统一由 tests/setup.ts 在 preload 阶段指定（test_dwoj.db），
+// 这里不再设置 env（静态 import 会被提升，写在文件里已经太晚），
+// 也不删除/关闭共享库，避免影响同进程里其它测试文件。
+import { initDb, query, queryOne, execute, dialect, upsertSql } from '../lib/database';
 
 beforeAll(async () => {
-    removeDbFiles();
     await initDb();
-});
-
-afterAll(async () => {
-    await closeDb();
-    removeDbFiles();
 });
 
 describe('database', () => {
@@ -41,17 +26,18 @@ describe('database', () => {
     });
 
     test('query returns array of results', async () => {
+        const marker = `Test Problem ${Date.now()}`;
         await execute(
             'INSERT INTO problems (title, description, authorId, timeLimit) VALUES (?, ?, ?, ?)',
-            ['Test Problem', 'Description', 1, 1000]
+            [marker, 'Description', 1, 1000]
         );
 
         const results = await query<{ id: number; title: string }>(
-            'SELECT id, title FROM problems WHERE authorId = ?',
-            [1]
+            'SELECT id, title FROM problems WHERE title = ?',
+            [marker]
         );
         expect(results.length).toBeGreaterThanOrEqual(1);
-        expect(results[0].title).toBe('Test Problem');
+        expect(results[0].title).toBe(marker);
     });
 
     test('query with parameters', async () => {
@@ -86,22 +72,24 @@ describe('database', () => {
     });
 
     test('execute updates data and returns changes count', async () => {
-        await execute('INSERT INTO problems (title) VALUES (?)', ['Update Test']);
+        const marker = `Update Test ${Date.now()}`;
+        await execute('INSERT INTO problems (title) VALUES (?)', [marker]);
 
         const result = await execute(
             'UPDATE problems SET title = ? WHERE title = ?',
-            ['Updated', 'Update Test']
+            ['Updated', marker]
         );
         expect(result.changes).toBe(1);
     });
 
     test('execute deletes data', async () => {
-        await execute('INSERT INTO problems (title) VALUES (?)', ['Delete Me']);
+        const marker = `Delete Me ${Date.now()}`;
+        await execute('INSERT INTO problems (title) VALUES (?)', [marker]);
 
-        const result = await execute('DELETE FROM problems WHERE title = ?', ['Delete Me']);
+        const result = await execute('DELETE FROM problems WHERE title = ?', [marker]);
         expect(result.changes).toBe(1);
 
-        const check = await queryOne('SELECT * FROM problems WHERE title = ?', ['Delete Me']);
+        const check = await queryOne('SELECT * FROM problems WHERE title = ?', [marker]);
         expect(check).toBeUndefined();
     });
 

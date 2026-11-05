@@ -1,8 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 
 // 这些测试只覆盖后端选择逻辑，不会真的启动虚拟机
-// （JUDGE_SANDBOX=process 由 tests/setup.ts 在 preload 阶段设置）
-process.env.DWOJ_DB_NAME = 'test_judge_backend.db';
+// （JUDGE_SANDBOX / DWOJ_DB_NAME 由 tests/setup.ts 在 preload 阶段统一设置）
 
 import {
     STATUS_TEXT,

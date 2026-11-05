@@ -3,10 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import { spawnSync } from 'child_process';
 
-// 隔离测试数据库，避免污染开发库
-process.env.DWOJ_DB_NAME = 'test_judge.db';
-// 单元测试固定用进程后端，避免真的去启动虚拟机
-process.env.JUDGE_SANDBOX = 'process';
+// 测试库/后端由 tests/setup.ts 在 preload 阶段统一设置
 
 import { compareOutput, normalizeOutput } from '../lib/judge/compare';
 import { compareCaseName, clampTimeLimit, loadCases } from '../lib/judge/testcase';

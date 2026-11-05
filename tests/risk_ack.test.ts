@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 
-process.env.DWOJ_DB_NAME = 'test_risk_ack.db';
+// 测试环境变量由 tests/setup.ts 在 preload 阶段统一设置
 
 import { resetBackend } from '../lib/judge/backend';
 import {

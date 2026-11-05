@@ -11,7 +11,7 @@ export const JWT_SECRET: string = process.env.JWT_SECRET || 'your_jwt_secret_key
 
 export const UPDATE_CHECK_URL: string = 'http://static.mr-onion-blog.fun/deploy/dwoj/dwoj.json';
 export const UPDATE_PACKAGE_URL: string = 'http://static.mr-onion-blog.fun/deploy/dwoj/dwoj.tar.gz';
-export const CURRENT_VERSION: string = '4.0.0';
+export const CURRENT_VERSION: string = '4.0.1';
 
 // ============================================================
 // 数据库配置
