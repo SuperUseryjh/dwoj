@@ -8,6 +8,9 @@
  *   1. 共享目录 /mnt/9p 只由守护进程（root）读写；用户代码跑在一个 **chroot 沙箱**
  *      `/srv/ojroot` 里，里面根本看不到 /mnt/9p，也就无法读别人的源码/测试数据、
  *      无法伪造 out_/res_/ok_ 结果。
+ *   1b. C/C++ 的编译（预处理/编译/汇编/链接）同样在 chroot + nobody 下运行，
+ *      只能看到当前 work 目录；产物校验（ELF magic / 大小）后才由 root 放入
+ *      root-only 的 /opt/bin 缓存（issue #6：防止 .incbin 读取他人缓存）。
  *   2. chroot 里以 **nobody(65534)** 运行，即使有内核漏洞也不是 root。
  *   3. 每个测试点用**独立的 work 目录**（跑完即删），`/tmp` 也每轮清空，
  *      不会留下跨提交的残留（例如采集答案的 /tmp/answers）。
@@ -44,6 +47,7 @@ JOB_PREFIX = "job_"
 OWN_PREFIXES = ("sol_", "in_", "out_", "err_", "res_", "job_", "ok_")
 MAX_STDERR = 8192
 FSIZE_LIMIT = 16 * 1024 * 1024
+COMPILE_FSIZE_LIMIT = 64 * 1024 * 1024
 
 # 预热：让这些模块留在常驻进程的内存/页缓存里，fork 出来的子进程直接继承
 PRELOAD = (
@@ -134,6 +138,21 @@ def clear_tmp():
         pass
 
 
+def cleanup_work(current_tag=None):
+    """删掉残留的 work 目录（含 input.txt / 源码），避免被后续编译或运行读到。
+
+    守护进程是串行的：当前任务之外不该存在别的 work 目录。
+    上次守护进程崩溃时可能留下带隐藏输入的 work/<tag>，编译沙箱能读到它。
+    """
+    try:
+        for name in os.listdir(WORK):
+            if current_tag and name == current_tag:
+                continue
+            shutil.rmtree(os.path.join(WORK, name), ignore_errors=True)
+    except Exception:
+        pass
+
+
 def cleanup_previous(current_tag):
     """删掉上一轮遗留的共享目录文件（宿主机已经读完了），避免无限增长。"""
     try:
@@ -155,24 +174,142 @@ def cleanup_previous(current_tag):
 # ============================================================
 
 def compile_cpp(work, bin_rel, timeout_ms):
+    """
+    在 chroot + nobody 下编译，产物校验后才由 root 放进 /opt/bin 缓存。
+
+    issue #6：编译曾以 root 跑在 chroot 外，用户可以用 GCC 的
+    .incbin 指令让汇编器读取 root-only 的其他提交缓存（或 /mnt/9p），
+    再在降权运行时把字节写出来执行。现在编译器看不到 /mnt/9p、
+    也读不到 0700 的缓存目录，只能看到当前 work 目录里的源码。
+    """
+    tag = os.path.basename(work)
     dst = OJR + bin_rel
+    target = os.path.join(work, "prog")
+
+    # 编译进程以 nobody 运行，需要能在自己的 work 目录里写产物
     try:
-        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        os.chown(work, RUN_UID, RUN_GID)
+        os.chmod(work, 0o755)
     except Exception:
         pass
+    for leftover in (target, os.path.join(work, "compile.out"), os.path.join(work, "compile.err")):
+        try:
+            os.unlink(leftover)
+        except Exception:
+            pass
+
+    out_path = os.path.join(work, "compile.out")
+    err_path = os.path.join(work, "compile.err")
     try:
-        proc = run_quiet(GXX + ["-o", dst, "main.cpp"], cwd=work, timeout=timeout_ms / 1000.0)
-    except subprocess.TimeoutExpired:
-        return 123, "编译超时（超过 %d ms）" % timeout_ms
+        out_fd = os.open(out_path, os.O_RDWR | os.O_CREAT | os.O_TRUNC, 0o600)
+        err_fd = os.open(err_path, os.O_RDWR | os.O_CREAT | os.O_TRUNC, 0o600)
     except Exception as exc:
         return 123, "编译失败：%s" % exc
-    if proc.returncode != 0:
-        msg = proc.stderr.decode("utf-8", "replace")[:MAX_STDERR]
-        return 123, msg or ("编译失败（退出码 %d）" % proc.returncode)
+
+    started = time.time()
+    pid = os.fork()
+    if pid == 0:
+        # ---------------- 子进程：chroot + 降权后 exec 编译器 ----------------
+        try:
+            os.dup2(out_fd, 1)
+            os.dup2(err_fd, 2)
+            for fd in (out_fd, err_fd):
+                if fd > 2:
+                    os.close(fd)
+
+            os.setsid()
+
+            try:
+                resource.setrlimit(resource.RLIMIT_NPROC, (32, 32))
+                resource.setrlimit(resource.RLIMIT_FSIZE, (COMPILE_FSIZE_LIMIT, COMPILE_FSIZE_LIMIT))
+                resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+            except Exception:
+                pass
+
+            os.chroot(OJR)
+            os.chdir("/work/" + tag)
+
+            os.setgroups([])
+            os.setgid(RUN_GID)
+            os.setuid(RUN_UID)
+
+            env = {
+                "PATH": "/usr/bin:/bin",
+                "HOME": "/tmp",
+                "TMPDIR": "/tmp",
+                "LANG": "C.UTF-8",
+                "LC_ALL": "C.UTF-8",
+            }
+            os.execvpe(GXX[0], GXX + ["-o", "prog", "main.cpp"], env)
+        except BaseException:
+            pass
+        os._exit(126)
+
+    # ---------------- 父进程：带超时等待，超时杀整个编译进程组 ----------------
+    deadline = started + timeout_ms / 1000.0
+    status = None
+    while True:
+        try:
+            wpid, st = os.waitpid(pid, os.WNOHANG)
+        except ChildProcessError:
+            wpid, st = pid, 0
+        if wpid == pid:
+            status = st
+            break
+        if time.time() > deadline:
+            for killer in (lambda: os.killpg(pid, signal.SIGKILL), lambda: os.kill(pid, signal.SIGKILL)):
+                try:
+                    killer()
+                except Exception:
+                    pass
+            try:
+                os.waitpid(pid, 0)
+            except Exception:
+                pass
+            status = None
+            break
+        time.sleep(0.005)
+
+    reap()
+
+    err = b""
     try:
-        os.chmod(dst, 0o755)
+        os.lseek(err_fd, 0, os.SEEK_SET)
+        err = os.read(err_fd, MAX_STDERR)
     except Exception:
         pass
+    for fd in (out_fd, err_fd):
+        try:
+            os.close(fd)
+        except Exception:
+            pass
+
+    if status is None:
+        return 123, "编译超时（超过 %d ms）" % timeout_ms
+    if not os.WIFEXITED(status) or os.WEXITSTATUS(status) != 0:
+        msg = err.decode("utf-8", "replace").strip()
+        if not msg:
+            if os.WIFEXITED(status):
+                msg = "编译失败（退出码 %d）" % os.WEXITSTATUS(status)
+            else:
+                msg = "编译进程被信号终止"
+        return 123, msg[:MAX_STDERR]
+
+    # ---------------- 校验产物，再交给 root-only 缓存 ----------------
+    try:
+        st = os.stat(target)
+        if not os.path.isfile(target) or st.st_size <= 0 or st.st_size > COMPILE_FSIZE_LIMIT:
+            return 123, "编译产物无效"
+        with open(target, "rb") as f:
+            if f.read(4) != b"\x7fELF":
+                return 123, "编译产物不是 ELF 可执行文件"
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        tmp_dst = dst + ".tmp"
+        shutil.copyfile(target, tmp_dst)
+        os.chmod(tmp_dst, 0o755)
+        os.replace(tmp_dst, dst)
+    except Exception as exc:
+        return 123, "编译产物校验失败：%s" % exc
     return 0, ""
 
 
@@ -354,6 +491,7 @@ def run_case(tag, job, work):
 
 def handle(tag):
     cleanup_previous(tag)
+    cleanup_work(tag)
 
     job_path = os.path.join(RES, JOB_PREFIX + tag + ".json")
     job = _json.loads(read_bytes(job_path).decode("utf-8"))
@@ -396,8 +534,10 @@ def handle(tag):
         if lang == "cpp":
             bin_rel = job["bin"]
             if job.get("compile"):
+                # 编译成功后 work/prog 已经就位，同时已备份到 root-only 缓存
                 rc, compile_error = compile_cpp(work, bin_rel, int(job.get("compileTimeoutMs", 180000)))
-            if rc == 0:
+            elif rc == 0:
+                # 复用缓存：从 root-only 目录硬链接/拷贝到本次 work
                 target = os.path.join(work, "prog")
                 try:
                     os.link(OJR + bin_rel, target)
@@ -441,6 +581,9 @@ def main():
     try:
         set_subreaper()
         prepare_root()
+        # 启动时清理上次崩溃留下的 work / tmp（可能含隐藏测试输入）
+        cleanup_work()
+        clear_tmp()
     except BaseException:
         # 沙箱根目录建不起来就 fail-closed：不接活，让宿主机判定为 System Error
         try:

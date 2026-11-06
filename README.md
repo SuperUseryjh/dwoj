@@ -251,6 +251,10 @@ JUDGE_SANDBOX=v86 bun app.ts
   `nobody(65534)` 身份、独立进程组、`RLIMIT_NPROC/FSIZE` 限制运行，每个测试点用
   独立的 work 目录（跑完即删）。因此用户代码**读不到**别的提交的源码/测试数据，
   也**写不了** `job_*/res_*/out_*/ok_*` 这些控制与结果文件。
+- **编译阶段同样在沙箱里**：C/C++ 的预处理、编译、汇编、链接全部在同一个
+  `chroot` + `nobody` 下执行，编译器只能看到当前提交的 work 目录；产物通过
+  ELF/大小校验后才由 root 放进 `/opt/bin`（0700）缓存。因此 `.incbin` /
+  `#include` 无法读取其他提交的编译缓存、`/mnt/9p` 或 root-only 文件（issue #6）。
 - 客户机里常驻一个 **Python 评测守护进程**（`/mnt/9p/daemon.py`）：
   * Python 提交：`fork` 子进程执行用户代码，省掉解释器冷启动 →
     单测试点约 **50~200 ms**（早期实现每次重开解释器是 1~4 s）；

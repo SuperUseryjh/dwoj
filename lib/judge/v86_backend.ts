@@ -149,6 +149,12 @@ export class V86Backend implements ExecutionBackend {
             const timeMs = Number(result.timeMs) || 0;
             const kind = classifyGuestResult(rc, result.compileError);
 
+            // 只有编译确实成功（进入运行阶段）才把缓存登记为可复用；
+            // CE 时产物不存在，登记了会让重测直接跑空缓存（issue #6 建议 5）。
+            if (isCpp && compile && kind !== 'CE') {
+                this.markCompiled(req, bin);
+            }
+
             if (kind === 'CE') {
                 return { status: 'CE', message: String(result.compileError).trim() };
             }
@@ -186,19 +192,27 @@ export class V86Backend implements ExecutionBackend {
     }
 
     /** 每个提交只编译一次 C++ */
+    private codeHash(req: ExecuteRequest): string {
+        return crypto.createHash('sha1').update(req.code).digest('hex');
+    }
+
+    /** 只做判断，不登记：编译失败时不能把缓存标记为可复用（issue #6 建议 5） */
     private needsCompile(req: ExecuteRequest, bin: string): boolean {
         const id = req.submissionId ?? -1;
-        const hash = crypto.createHash('sha1').update(req.code).digest('hex');
         const entry = this.compiled.get(id);
-        if (entry && entry.hash === hash && entry.bin === bin) return false;
-        this.compiled.set(id, { hash, bin });
+        return !(entry && entry.hash === this.codeHash(req) && entry.bin === bin);
+    }
+
+    /** 编译成功（产物已通过校验并写入缓存）之后才登记 */
+    private markCompiled(req: ExecuteRequest, bin: string): void {
+        const id = req.submissionId ?? -1;
+        this.compiled.set(id, { hash: this.codeHash(req), bin });
         if (this.compiled.size > MAX_COMPILED_SUBMISSIONS) {
             const oldest = this.compiled.keys().next().value as number;
             const stale = this.compiled.get(oldest);
             this.compiled.delete(oldest);
             if (stale) this.usedBins.add(stale.bin);
         }
-        return true;
     }
 
     /** 取出需要清理的旧编译产物（随下一个 job 一起交给守护进程删除） */
