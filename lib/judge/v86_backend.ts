@@ -64,6 +64,17 @@ export function classifyGuestResult(
     return 'RE';
 }
 
+/**
+ * 每个提交分配一个独立 UID（60000–63999），让不同提交的进程不能互相发信号。
+ * 这才是 issue #7 的纵深防御：即使有孤儿逃过清理，也动不了别人的提交。
+ * 没有 submissionId（anon / 测试）时退回 nobody(65534)。
+ */
+export function runUidForSubmission(submissionId?: number): number {
+    const id = Number(submissionId);
+    if (!Number.isInteger(id) || id <= 0) return 65534;
+    return 60000 + (id % 4000);
+}
+
 export class V86Backend implements ExecutionBackend {
     readonly name = 'v86';
     readonly languages = config.V86_LANGUAGES;
@@ -114,6 +125,7 @@ export class V86Backend implements ExecutionBackend {
         // 沙箱内的编译产物（仅 root 可访问；每次运行时硬链接到私有 work 目录）
         const bin = `/opt/bin/prog_${req.submissionId ?? 'anon'}`;
         const compile = isCpp && this.needsCompile(req, bin);
+        const runUid = runUidForSubmission(req.submissionId);
         const limit = req.timeLimitMs;
         const compileTimeout = config.V86_COMPILE_TIMEOUT_MS;
 
@@ -132,6 +144,7 @@ export class V86Backend implements ExecutionBackend {
                 src,
                 inp,
                 bin,
+                runUid,
                 compileTimeoutMs: compileTimeout,
                 rmBins: this.drainStaleBins(),
             }));

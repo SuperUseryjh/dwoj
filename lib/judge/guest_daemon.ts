@@ -11,14 +11,17 @@
  *   1b. C/C++ 的编译（预处理/编译/汇编/链接）同样在 chroot + nobody 下运行，
  *      只能看到当前 work 目录；产物校验（ELF magic / 大小）后才由 root 放入
  *      root-only 的 /opt/bin 缓存（issue #6：防止 .incbin 读取他人缓存）。
- *   2. chroot 里以 **nobody(65534)** 运行，即使有内核漏洞也不是 root。
+ *   2. chroot 里以**每个提交独立的 UID**（60000+id%4000，anon 用 nobody）运行，
+ *      不同提交之间不能互发信号；即使有内核漏洞也不是 root。
  *   3. 每个测试点用**独立的 work 目录**（跑完即删），`/tmp` 也每轮清空，
  *      不会留下跨提交的残留（例如采集答案的 /tmp/answers）。
  *   4. 用户进程放进独立进程组（setsid），超时/结束时整组 SIGKILL，
  *      并设置 RLIMIT_NPROC / RLIMIT_FSIZE 限制 fork 与写盘。
  *   5. 子进程把 SIGCHLD 设为 SIG_IGN（内核自动回收），避免「有子进程退出而父进程
  *      没 waitpid」这种情况触发 v86 的 `Unimplemented: #GP handler` 崩掉宿主进程；
- *      守护进程自身也注册成 subreaper 并主动回收孤儿。
+ *      守护进程自身也注册成 subreaper，并在**每个任务结束时**（不只是超时）
+ *      杀掉全部后代进程（包括 setsid / 双 fork 逃逸的孤儿），防止它活到下一个提交
+ *      去干扰别人（issue #7）。
  *   6. 输出通过父进程持有的 fd 读取（不按文件名读），用户即使删掉同名文件也改不了结果。
  *
  * 协议（全部通过 9p 共享目录交换文件；这些文件用户代码都碰不到）：
@@ -39,8 +42,9 @@ RES = "/mnt/9p"
 OJR = "/srv/ojroot"          # 用户代码看到的“根”，里面没有 /mnt/9p
 WORK = OJR + "/work"         # 每个测试点一个子目录
 BIN_DIR = OJR + "/opt/bin"   # 编译产物（按提交缓存，仅 root 可访问）
-RUN_UID = 65534              # nobody
-RUN_GID = 65534
+DEFAULT_RUN_UID = 65534      # anon / 无有效 submissionId 时的兜底用户
+RUN_UID_BASE = 60000         # 每个提交分配独立 UID：不同提交之间不能互发信号（issue #7）
+RUN_UID_SPAN = 4000
 GXX = ["g++", "-O2", "-std=c++17", "-pipe", "-w"]
 OK_PREFIX = "ok_"
 JOB_PREFIX = "job_"
@@ -122,6 +126,79 @@ def reap():
             return
 
 
+def _proc_stat(pid):
+    """返回 /proc/<pid>/stat 的 (ppid, state)，读取失败返回 (None, None)。"""
+    try:
+        data = read_bytes("/proc/%d/stat" % pid).decode("utf-8", "replace")
+        rest = data.rsplit(")", 1)[1].split()
+        return int(rest[1]), rest[0]
+    except Exception:
+        return None, None
+
+
+def _proc_uid(pid):
+    try:
+        for line in read_bytes("/proc/%d/status" % pid).decode("utf-8", "replace").splitlines():
+            if line.startswith("Uid:"):
+                return int(line.split()[1])
+    except Exception:
+        pass
+    return None
+
+
+def kill_stragglers(uid=None, timeout=2.0, uid_range=False):
+    """杀掉本次任务留下的所有后代进程（含 setsid / 双 fork 逃逸的孤儿）。
+
+    issue #7：只在超时时 killpg、正常退出只 wait 直接子进程是不够的。
+    用户可以 fork 一个后台进程自己正常退出，孤儿活到下一个提交，
+    再用同一 UID 对别人的进程发 SIGKILL/SIGSTOP 改变 verdict。
+    daemon 注册了 PR_SET_CHILD_SUBREAPER，孤儿最终会 reparent 到本进程，
+    所以反复扫描 PPid == daemon（以及本次任务的 UID）并 SIGKILL。
+    """
+    me = os.getpid()
+    deadline = time.time() + timeout
+    while True:
+        victims = []
+        try:
+            names = os.listdir("/proc")
+        except Exception:
+            names = []
+        for name in names:
+            if not name.isdigit():
+                continue
+            pid = int(name)
+            if pid <= 1 or pid == me:
+                continue
+            ppid, state = _proc_stat(pid)
+            if state == "Z":
+                if ppid == me:
+                    victims.append(pid)
+                continue
+            hit = ppid == me
+            if not hit and uid is not None and _proc_uid(pid) == uid:
+                hit = True
+            if not hit and uid_range:
+                puid = _proc_uid(pid)
+                if puid is not None and RUN_UID_BASE <= puid < RUN_UID_BASE + RUN_UID_SPAN:
+                    hit = True
+            if hit:
+                victims.append(pid)
+
+        for pid in victims:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except Exception:
+                pass
+
+        reap()
+
+        if not victims:
+            return
+        if time.time() > deadline:
+            return
+        time.sleep(0.01)
+
+
 def clear_tmp():
     tmp = OJR + "/tmp"
     try:
@@ -173,7 +250,7 @@ def cleanup_previous(current_tag):
 # 编译
 # ============================================================
 
-def compile_cpp(work, bin_rel, timeout_ms):
+def compile_cpp(work, bin_rel, timeout_ms, uid):
     """
     在 chroot + nobody 下编译，产物校验后才由 root 放进 /opt/bin 缓存。
 
@@ -186,9 +263,10 @@ def compile_cpp(work, bin_rel, timeout_ms):
     dst = OJR + bin_rel
     target = os.path.join(work, "prog")
 
-    # 编译进程以 nobody 运行，需要能在自己的 work 目录里写产物
+    # 编译进程以该提交专属的 uid 运行，需要能在自己的 work 目录里写产物
+    gid = uid
     try:
-        os.chown(work, RUN_UID, RUN_GID)
+        os.chown(work, uid, gid)
         os.chmod(work, 0o755)
     except Exception:
         pass
@@ -230,8 +308,8 @@ def compile_cpp(work, bin_rel, timeout_ms):
             os.chdir("/work/" + tag)
 
             os.setgroups([])
-            os.setgid(RUN_GID)
-            os.setuid(RUN_UID)
+            os.setgid(gid)
+            os.setuid(uid)
 
             env = {
                 "PATH": "/usr/bin:/bin",
@@ -321,10 +399,14 @@ def run_case(tag, job, work):
     lang = job.get("lang")
     limit = int(job["limit"])
     max_out = int(job["maxOut"])
+    uid = int(job.get("runUid") or DEFAULT_RUN_UID)
+    if uid < 1000 or uid > 65533:
+        uid = DEFAULT_RUN_UID
+    gid = uid
 
-    # 工作目录给 nobody，方便程序写临时文件；stdout/stderr 由父进程持有 fd，用户改不到
+    # 工作目录给本次提交的 uid，方便程序写临时文件；stdout/stderr 由父进程持有 fd
     try:
-        os.chown(work, RUN_UID, RUN_GID)
+        os.chown(work, uid, gid)
         os.chmod(work, 0o755)
     except Exception:
         pass
@@ -358,8 +440,8 @@ def run_case(tag, job, work):
             os.chdir("/work/" + tag)
 
             os.setgroups([])
-            os.setgid(RUN_GID)
-            os.setuid(RUN_UID)
+            os.setgid(gid)
+            os.setuid(uid)
 
             os.environ.clear()
             os.environ.update({
@@ -482,6 +564,15 @@ def run_case(tag, job, work):
         rc = 125
         out = out[:max_out]
 
+    # 直接子进程结束（正常或超时）后，清掉它整组/全部后代：
+    # 用户代码可以 fork 后台进程后自己退出，只 wait 直接子进程会留下孤儿（issue #7）。
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except Exception:
+        pass
+    kill_stragglers(uid)
+    clear_tmp()
+
     return rc, elapsed, out, err
 
 
@@ -492,6 +583,9 @@ def run_case(tag, job, work):
 def handle(tag):
     cleanup_previous(tag)
     cleanup_work(tag)
+    # 上一个任务若在 2s 清理窗口内疯狂 fork，可能还有漏网之鱼；开跑前再扫一遍。
+    # 60000-63999 是提交专用 UID 段，不会误伤系统进程。
+    kill_stragglers(uid_range=True)
 
     job_path = os.path.join(RES, JOB_PREFIX + tag + ".json")
     job = _json.loads(read_bytes(job_path).decode("utf-8"))
@@ -511,6 +605,9 @@ def handle(tag):
     os.makedirs(work, mode=0o700, exist_ok=True)
 
     lang = job.get("lang")
+    run_uid = int(job.get("runUid") or DEFAULT_RUN_UID)
+    if run_uid < 1000 or run_uid > 65533:
+        run_uid = DEFAULT_RUN_UID
     ext = "cpp" if lang == "cpp" else "py"
     shutil.copyfile(os.path.join(RES, job["src"]), os.path.join(work, "main." + ext))
     # 输入先读进内存并从 9p 删除，**等编译结束**才落到 work 目录。
@@ -535,7 +632,7 @@ def handle(tag):
             bin_rel = job["bin"]
             if job.get("compile"):
                 # 编译成功后 work/prog 已经就位，同时已备份到 root-only 缓存
-                rc, compile_error = compile_cpp(work, bin_rel, int(job.get("compileTimeoutMs", 180000)))
+                rc, compile_error = compile_cpp(work, bin_rel, int(job.get("compileTimeoutMs", 180000)), run_uid)
             elif rc == 0:
                 # 复用缓存：从 root-only 目录硬链接/拷贝到本次 work
                 target = os.path.join(work, "prog")
@@ -564,6 +661,9 @@ def handle(tag):
         err = traceback.format_exc()[:MAX_STDERR].encode("utf-8", "replace")
         rc = 1
     finally:
+        # 任何退出路径（OK/RE/TLE/OLE/异常）都必须先杀光本次任务的后台进程，
+        # 否则孤儿会活到下一个提交（issue #7）。
+        kill_stragglers(run_uid)
         write_bytes(os.path.join(RES, "out_%s.txt" % tag), out)
         write_bytes(os.path.join(RES, "err_%s.txt" % tag), err)
         result = {"rc": rc, "timeMs": elapsed}
@@ -584,6 +684,8 @@ def main():
         # 启动时清理上次崩溃留下的 work / tmp（可能含隐藏测试输入）
         cleanup_work()
         clear_tmp()
+        # 同一 VM 里重启 daemon 时，上一代留下的用户进程也要清掉
+        kill_stragglers(uid_range=True)
     except BaseException:
         # 沙箱根目录建不起来就 fail-closed：不接活，让宿主机判定为 System Error
         try:
