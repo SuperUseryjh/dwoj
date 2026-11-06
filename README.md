@@ -176,30 +176,6 @@ DB_DRIVER=postgres DB_URL='postgres://user:pass@127.0.0.1:5432/dwoj' bun app.ts
 
 > 注意：切换数据库不会自动迁移旧数据，请自行导出导入。
 
-### PM2 部署说明
-
-系统已集成 PM2 进程管理器，提供更稳定的生产环境部署方案。
-
-**常用 PM2 命令:**
-```bash
-# 查看状态
-pm2 status
-
-# 查看日志
-pm2 logs dwoj
-
-# 重启应用
-pm2 restart dwoj
-
-# 停止应用
-pm2 stop dwoj
-
-# 实时监控
-pm2 monit
-```
-
-**详细部署文档请查看:** [DEPLOYMENT.md](./DEPLOYMENT.md)
-
 ---
 
 ## 2. 使用教程
