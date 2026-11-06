@@ -132,6 +132,10 @@ async function handleCall(msg: Envelope): Promise<void> {
 function write(msg: Envelope): void {
     try {
         process.stdout.write(encode(msg) + '\n');
+        // 同 broker：Bun 的管道写入错误在 flush 时才以 rejected promise 出现，
+        // broker 退出后不 catch 会变成 unhandledRejection。
+        const flushed: any = (process.stdout as any).flush?.();
+        if (flushed && typeof flushed.catch === 'function') flushed.catch(() => {});
     } catch (_) { /* broker 已退出 */ }
 }
 

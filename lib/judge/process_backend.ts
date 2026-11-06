@@ -83,17 +83,53 @@ interface Compiler {
 
 let cachedCompiler: Compiler | null | undefined;
 
+/**
+ * 探测编译器是否接受「禁用内联汇编」的宏。
+ *
+ * 部分 mingw / libstdc++ 头文件内部就使用 asm（例如 _mingw.h），
+ * 强行把 asm 替换成 error 会让 <cstdio> 这类标准头直接编译失败，
+ * 所有 C++ 提交都变成 CE。此时宁可不加这两个宏：
+ * 真正的隔离靠 v86 的 chroot + nobody，不靠编译期宏拦截。
+ */
+function compilerAcceptsAsmBlocking(cmd: string): boolean {
+    const probeDir = path.join(config.JUDGE_DIR, `probe_${process.pid}_${Date.now()}`);
+    const out = path.join(probeDir, process.platform === 'win32' ? 'probe.exe' : 'probe');
+    try {
+        fs.ensureDirSync(probeDir);
+        const result = spawnSync(
+            cmd,
+            ['-O2', '-std=c++17', '-pipe', '-w', '-Dasm=error', '-D__asm__=error', '-x', 'c++', '-', '-o', out],
+            { input: '#include <cstdio>\nint main() { return 0; }\n', timeout: 20000, windowsHide: true },
+        );
+        return result.status === 0;
+    } catch (_) {
+        return false;
+    } finally {
+        try { fs.removeSync(probeDir); } catch (_) { /* ignore */ }
+    }
+}
+
 /** 找到可用的 C++ 编译器，优先 g++，其次 gcc + libstdc++ */
 export function resolveCppCompiler(): Compiler {
     if (cachedCompiler === undefined) {
         cachedCompiler = null;
-        const common = ['-O2', '-std=c++17', '-pipe', '-w'];
-        if (firstWorking(['g++', 'g++.exe', 'clang++'], ['--version'])) {
-            const cmd = firstWorking(['g++', 'g++.exe', 'clang++'], ['--version'])!;
-            cachedCompiler = { cmd, args: [...common, '%SRC%', '-o', '%OUT%'], output: 'main' };
-        } else if (firstWorking(['gcc', 'gcc.exe'], ['--version'])) {
-            const cmd = firstWorking(['gcc', 'gcc.exe'], ['--version'])!;
-            cachedCompiler = { cmd, args: [...common, '%SRC%', '-o', '%OUT%', '-lstdc++', '-lm'], output: 'main' };
+        const base = ['-O2', '-std=c++17', '-pipe', '-w'];
+        const asmGuard = ['-Dasm=error', '-D__asm__=error'];
+
+        const cppCmd = firstWorking(['g++', 'g++.exe', 'clang++'], ['--version']);
+        const cCmd = cppCmd ? null : firstWorking(['gcc', 'gcc.exe'], ['--version']);
+        const cmd = cppCmd || cCmd;
+
+        if (cmd) {
+            const args = compilerAcceptsAsmBlocking(cmd) ? [...base, ...asmGuard] : base;
+            if (args === base) {
+                logger.warn(`${cmd} 的标准头文件内部使用 asm，已跳过 -Dasm=error 内联汇编拦截`);
+            }
+            cachedCompiler = {
+                cmd,
+                args: cppCmd ? [...args, '%SRC%', '-o', '%OUT%'] : [...args, '%SRC%', '-o', '%OUT%', '-lstdc++', '-lm'],
+                output: 'main',
+            };
         }
     }
     if (!cachedCompiler) throw new JudgeError('SE', '评测机未找到 C++ 编译器（g++ / gcc）');

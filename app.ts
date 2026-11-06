@@ -9,6 +9,15 @@ import Updater from './lib/updater';
 
 const logger = createLogger('broker');
 
+// 子进程在关闭瞬间断开管道时，Bun 会把 EPIPE 作为 unhandledRejection 抛出
+// （FileSink 的写入错误只有 flush 时才可见）。这是正常竞态，不应该让
+// Ctrl+C 关闭变成 exit 1；其它 rejection 仍然打印出来，避免掩盖真正的 bug。
+process.on('unhandledRejection', (reason: any) => {
+    const code = reason?.code;
+    if (code === 'EPIPE' || code === 'ERR_STREAM_DESTROYED' || code === 'ERR_STREAM_WRITE_AFTER_END') return;
+    logger.error('unhandled rejection', reason as Error);
+});
+
 /**
  * DWOJ 入口。
  *
@@ -56,10 +65,18 @@ async function runBroker(): Promise<void> {
     const broker = new Broker();
     let stopping = false;
     const shutdown = async (signal: string): Promise<void> => {
-        if (stopping) return;
+        if (stopping) {
+            // 第二次 Ctrl+C：不再等待，强制退出（仍然 0，避免被脚本误判为失败）
+            logger.warn('forced shutdown');
+            process.exit(0);
+        }
         stopping = true;
         logger.info(`received ${signal}, shutting down`);
-        await broker.stop();
+        try {
+            await broker.stop();
+        } catch (err) {
+            logger.error('shutdown failed', err as Error);
+        }
         process.exit(0);
     };
     process.on('SIGINT', () => void shutdown('SIGINT'));

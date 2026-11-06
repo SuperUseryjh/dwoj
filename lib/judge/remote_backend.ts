@@ -49,8 +49,11 @@ export class RemoteBackend implements ExecutionBackend {
         this.ready = false;
         if (proc) {
             try {
-                proc.stdin?.write(JSON.stringify({ type: 'dispose' }) + '\n');
-            } catch (_) { /* ignore */ }
+                const stdin: any = proc.stdin;
+                stdin?.write(JSON.stringify({ type: 'dispose' }) + '\n');
+                const flushed = typeof stdin?.flush === 'function' ? stdin.flush() : null;
+                if (flushed && typeof flushed.catch === 'function') flushed.catch(() => {});
+            } catch (_) { /* worker 已退出 */ }
             try {
                 proc.kill();
             } catch (_) { /* ignore */ }
@@ -78,7 +81,7 @@ export class RemoteBackend implements ExecutionBackend {
 
             this.pending.set(id, { resolve, timer });
             try {
-                this.proc?.stdin?.write(JSON.stringify({ type: 'execute', id, req }) + '\n');
+                this.writeToWorker({ type: 'execute', id, req });
             } catch (err) {
                 clearTimeout(timer);
                 this.pending.delete(id);
@@ -98,6 +101,19 @@ export class RemoteBackend implements ExecutionBackend {
             : 0;
         const bootBudget = this.mode === 'v86' ? config.V86_BOOT_TIMEOUT_MS : 0;
         return req.timeLimitMs + compileBudget + bootBudget + 60000;
+    }
+
+    /**
+     * 往 worker 的 stdin 写一帧。
+     * Bun FileSink 的 EPIPE 在 flush 时才以 rejected promise 出现，
+     * 不就地吞掉会变成 unhandledRejection（worker 崩溃/关闭时很常见）。
+     */
+    private writeToWorker(message: Record<string, unknown>): void {
+        const stdin: any = this.proc?.stdin;
+        if (!stdin) throw new Error('评测工作进程未启动');
+        stdin.write(JSON.stringify(message) + '\n');
+        const flushed = typeof stdin.flush === 'function' ? stdin.flush() : null;
+        if (flushed && typeof flushed.catch === 'function') flushed.catch(() => {});
     }
 
     private async ensureWorker(): Promise<void> {

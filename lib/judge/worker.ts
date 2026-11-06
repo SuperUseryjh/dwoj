@@ -23,7 +23,12 @@ console.info = (...args: any[]) => console.error(...args);
 const backendName = process.env.JUDGE_WORKER_BACKEND === 'v86' ? 'v86' : 'process';
 
 function send(message: Record<string, unknown>): void {
-    process.stdout.write(JSON.stringify(message) + '\n');
+    try {
+        process.stdout.write(JSON.stringify(message) + '\n');
+        // 管道对端（judge 进程）退出时的 EPIPE 是正常竞态，别让它变成 unhandledRejection
+        const flushed: any = (process.stdout as any).flush?.();
+        if (flushed && typeof flushed.catch === 'function') flushed.catch(() => {});
+    } catch (_) { /* 对端已退出 */ }
 }
 
 async function createBackend(): Promise<ExecutionBackend> {

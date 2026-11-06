@@ -224,10 +224,23 @@ export class Broker {
             if (String(process.env.DWOJ_IPC_TRACE || '') === '1') logger.warn(`no child for ${role}`);
             return;
         }
+        // 子进程已经退出：管道必然 EPIPE，直接丢弃（关闭/重启期间的正常竞态）
+        if (child.proc.exitCode !== null) return;
+
+        const stdin: any = child.proc.stdin;
+        if (!stdin) return;
         try {
-            child.proc.stdin.write(encode(msg) + '\n');
+            stdin.write(encode(msg) + '\n');
+            // Bun 的 FileSink.write() 只是同步缓冲，真正的 EPIPE 在 flush 时才以
+            // rejected promise 出现；不 catch 会变成 unhandledRejection，导致
+            // Ctrl+C 关闭时 broker 以 exit 1 崩掉。
+            const flushed = typeof stdin.flush === 'function' ? stdin.flush() : null;
+            if (flushed && typeof flushed.catch === 'function') flushed.catch(() => {});
         } catch (err) {
-            logger.error(`write to ${role} failed`, err as Error);
+            const code = (err as any)?.code;
+            if (code !== 'EPIPE' && code !== 'ERR_STREAM_DESTROYED' && code !== 'ERR_STREAM_WRITE_AFTER_END') {
+                logger.error(`write to ${role} failed`, err as Error);
+            }
         }
     }
 
@@ -291,17 +304,25 @@ export class Broker {
 
         for (const child of this.children.values()) {
             child.stopped = true;
+            // 已经退出的子进程不要再写：给死管道发 shutdown 只会制造 EPIPE
+            if (child.proc.exitCode !== null) continue;
             this.writeTo(child.role, { kind: 'shutdown', from: 'broker', to: child.role });
         }
 
+        // onExit 会删除已退出的子进程；只等待「还活着」的（exitCode === null）。
+        // 注意不能只等 map 为空：测试 / 假子进程不会触发 onExit；
+        // 也不能只认 exitCode：Windows 上被信号终止的进程 exitCode 可能是 null，
+        // 但 onExit 会把它从 map 里删掉，所以两者要结合。
         const deadline = Date.now() + 3000;
-        while (Date.now() < deadline && [...this.children.values()].some(c => c.proc.exitCode === null)) {
+        while (Date.now() < deadline) {
+            const alive = [...this.children.values()].some(c => c.proc.exitCode === null);
+            if (!alive) break;
             await new Promise(resolve => setTimeout(resolve, 100));
         }
 
         for (const child of this.children.values()) {
             try {
-                if (child.proc.exitCode === null) child.proc.kill();
+                child.proc.kill();
             } catch (_) { /* ignore */ }
         }
         this.children.clear();
