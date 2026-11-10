@@ -19,8 +19,6 @@ export interface ConfigType {
     UPLOAD_DIR: string;
     PLUGINS_DIR: string;
     JWT_SECRET: string;
-    UPDATE_CHECK_URL: string;
-    UPDATE_PACKAGE_URL: string;
     CURRENT_VERSION: string;
 }
 
@@ -60,8 +58,7 @@ export interface PluginInfo {
     desc: string;
     version: string;
     enabled: boolean;
-    token: string;
-    permissions: string[];
+    builtin?: boolean;
 }
 
 export interface Submission {
@@ -110,13 +107,6 @@ export interface Thread {
     author: string;
     time: string;
     replies?: string;
-}
-
-export interface PluginConfig {
-    filename: string;
-    enabled: number;
-    token: string;
-    permissions?: string;
 }
 
 export type RoleLevel = 'default' | 'super_user' | 'root';

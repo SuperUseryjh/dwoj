@@ -1,5 +1,6 @@
 import { Router } from '../lib/bun-http';
 import { requireLogin } from '../middleware/auth';
+import { issueToken, TOKEN_MAX_AGE_MS } from '../lib/auth-token';
 import { execute } from '../lib/database';
 import logger from '../lib/logger';
 
@@ -32,6 +33,18 @@ router.post('/profile', requireLogin, (req, res, next) => {
 
     try {
         execute(`UPDATE users SET ${updateFields.join(', ')} WHERE id = ?`, updateValues);
+
+        // 重新签发 token，确保 bio 等展示字段同步
+        res.cookie('token', issueToken({
+            id: req.user.id,
+            username: req.user.username,
+            role: req.user.role,
+            bio: bio !== undefined ? bio : req.user.bio,
+        }), {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === 'production',
+            maxAge: TOKEN_MAX_AGE_MS,
+        });
         res.redirect('/profile');
     } catch (err) {
         logger.error('Error updating user profile', err as Error);

@@ -72,16 +72,11 @@ jobs:
         run: |
           bun build --compile --target=${{ matrix.target }} --outfile=./dist/dwoj-server${{ matrix.suffix }} ./app.ts
 
-      - name: Build CLI binary
-        run: |
-          bun build --compile --target=${{ matrix.target }} --outfile=./dist/dwoj${{ matrix.suffix }} ./dwoj-cli.ts
-
       - name: Package assets (Unix)
         if: runner.os != 'Windows'
         run: |
           mkdir -p ./dwoj-release
           cp ./dist/dwoj-server ./dwoj-release/
-          cp ./dist/dwoj ./dwoj-release/
           cp -r ./views ./dwoj-release/
           [ -d ./public ] && cp -r ./public ./dwoj-release/
           cp ./package.json ./dwoj-release/
@@ -95,7 +90,6 @@ jobs:
         run: |
           New-Item -ItemType Directory -Path .\dwoj-release -Force
           Copy-Item .\dist\dwoj-server.exe .\dwoj-release\
-          Copy-Item .\dist\dwoj.exe .\dwoj-release\
           Copy-Item -Recurse .\views .\dwoj-release\
           if (Test-Path .\public) { Copy-Item -Recurse .\public .\dwoj-release\ }
           Copy-Item .\package.json .\dwoj-release\

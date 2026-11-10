@@ -1,6 +1,5 @@
 import { Router } from '../lib/bun-http';
-import jwt from 'jsonwebtoken';
-import * as config from '../config';
+import { issueToken, TOKEN_MAX_AGE_MS } from '../lib/auth-token';
 import { User, queryOne, execute } from '../lib/database';
 import logger from '../lib/logger';
 
@@ -13,17 +12,18 @@ router.get('/login', (req, res, next) => {
 router.post('/login', (req, res, next) => {
     const { username, password } = req.body;
     try {
-        const user = queryOne<User>("SELECT id, username, password, role, isBanned FROM users WHERE username = ? AND password = ?", [username, password]);
+        const user = queryOne<User>("SELECT id, username, password, role, bio, isBanned FROM users WHERE username = ? AND password = ?", [username, password]);
         if (user) {
             if (user.isBanned) {
                 res.send('账号已被封禁');
                 return;
             }
 
-            const token = jwt.sign({ id: user.id, role: user.role }, config.JWT_SECRET, { expiresIn: '1h' });
-
-            res.cookie('token', token, { httpOnly: true, secure: process.env.NODE_ENV === 'production', maxAge: 3600000 });
-            res.cookie('uid', String(user.id));
+            res.cookie('token', issueToken(user), {
+                httpOnly: true,
+                secure: process.env.NODE_ENV === 'production',
+                maxAge: TOKEN_MAX_AGE_MS,
+            });
             res.redirect('/');
         } else {
             res.send('用户名或密码错误');

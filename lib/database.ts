@@ -1,16 +1,28 @@
 import { Database } from 'bun:sqlite';
 import path from 'path';
-import fs from 'fs-extra';
+import * as config from '../config';
+import { externalizeParams, resolveRowBlob } from './blobs';
+import { ensureDirSync } from './fs-utils';
 import logger from './logger';
 
 const dbName: string = process.env.DWOJ_DB_NAME || 'dwoj.db';
 const dbPath: string = path.join(__dirname, '..', 'data', dbName);
 
-fs.ensureDirSync(path.dirname(dbPath));
+ensureDirSync(path.dirname(dbPath));
 
 const db: Database = new Database(dbPath, { create: true });
 
-db.run('PRAGMA journal_mode = WAL;');
+if (config.LOWMEM) {
+    // 1 核 / 128 MB 降级配置：不用 WAL，page cache 256 KB，允许崩溃丢最后若干写
+    db.run('PRAGMA journal_mode = DELETE;');
+    db.run('PRAGMA synchronous = OFF;');
+    db.run('PRAGMA cache_size = -256;');
+    db.run('PRAGMA mmap_size = 0;');
+    db.run('PRAGMA temp_store = FILE;');
+    db.run('PRAGMA locking_mode = NORMAL;');
+} else {
+    db.run('PRAGMA journal_mode = WAL;');
+}
 
 export interface User {
     id: number;
@@ -59,18 +71,6 @@ export interface Thread {
     replies: string | null;
 }
 
-export interface Role {
-    id: number;
-    name: string;
-}
-
-export interface PluginConfig {
-    filename: string;
-    enabled: number;
-    token: string;
-    permissions: string | null;
-}
-
 export const initDb = (): void => {
     db.run(`CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -99,8 +99,16 @@ export const initDb = (): void => {
         code TEXT,
         status TEXT,
         time TEXT,
-        caseResults TEXT
+        caseResults TEXT,
+        errorInfo TEXT
     )`);
+
+    // 旧库迁移：补 errorInfo 列（判题写库依赖该列）
+    const submissionCols = db.query("PRAGMA table_info(submissions)").all() as Array<{ name: string }>;
+    if (!submissionCols.some(c => c.name === 'errorInfo')) {
+        db.run("ALTER TABLE submissions ADD COLUMN errorInfo TEXT");
+        logger.info('Migrated submissions table: added errorInfo column.');
+    }
 
     db.run(`CREATE TABLE IF NOT EXISTS discussNodes (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -118,17 +126,8 @@ export const initDb = (): void => {
         replies TEXT
     )`);
 
-    db.run(`CREATE TABLE IF NOT EXISTS roles (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT UNIQUE NOT NULL
-    )`);
-
-    db.run(`CREATE TABLE IF NOT EXISTS plugin_configs (
-        filename TEXT PRIMARY KEY,
-        enabled INTEGER DEFAULT 0,
-        token TEXT UNIQUE NOT NULL,
-        permissions TEXT
-    )`);
+    db.run(`CREATE INDEX IF NOT EXISTS idx_submissions_problem ON submissions(problemId, id)`);
+    db.run(`CREATE INDEX IF NOT EXISTS idx_threads_node ON threads(nodeId, id)`);
 
     const userCount = db.query("SELECT COUNT(*) AS count FROM users").get() as { count: number } | undefined;
     if (!userCount || userCount.count === 0) {
@@ -143,31 +142,32 @@ export const initDb = (): void => {
         logger.info('Initial discuss node inserted.');
     }
 
-    const roleCount = db.query("SELECT COUNT(*) AS count FROM roles").get() as { count: number } | undefined;
-    if (!roleCount || roleCount.count === 0) {
-        db.run(`INSERT INTO roles (name) VALUES ('default'), ('super_user'), ('root')`);
-        logger.info('Initial roles inserted.');
-    }
-
     logger.info('Database tables checked/created.');
 };
 
 // 内部可替换的实现（允许插件劫持）
+// 读取后统一解引用 blob；写入前把超长字符串外置为 blob 引用
 let _queryImpl = <T = any>(sql: string, params: any[] = []): T[] => {
-    return db.query(sql).all(...params) as T[];
+    const rows = db.query(sql).all(...params) as any[];
+    return rows.map(row => resolveRowBlob(row)) as T[];
 };
 
 let _queryOneImpl = <T = any>(sql: string, params: any[] = []): T | undefined => {
-    return db.query(sql).get(...params) as T | undefined;
+    const row = db.query(sql).get(...params) as any;
+    if (row === null || row === undefined) return row as T | undefined;
+    return resolveRowBlob(row) as T;
 };
 
 let _executeImpl = (sql: string, params: any[] = []): { lastInsertRowid: number; changes: number } => {
-    const result = db.run(sql, params);
+    const result = db.run(sql, externalizeParams(params));
     return {
         lastInsertRowid: Number(result.lastInsertRowid),
         changes: result.changes
     };
 };
+
+/** 事务：内部全部使用同步接口 */
+export const transaction = <T>(fn: () => T): T => db.transaction(fn)();
 
 export const query = <T = any>(sql: string, params: any[] = []): T[] => _queryImpl(sql, params);
 

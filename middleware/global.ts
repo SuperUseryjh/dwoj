@@ -1,31 +1,58 @@
-import MarkdownIt from 'markdown-it';
-import jwt from 'jsonwebtoken';
+import { verifyToken } from '../lib/auth-token';
+import { renderMarkdown } from '../lib/markdown';
 import { queryOne } from '../lib/database';
 import logger from '../lib/logger';
-import * as config from '../config';
 import { ROLE_LV } from './auth';
 
-const md = new MarkdownIt({
-    html: false,
-    breaks: true,
-    linkify: true
-});
+/** 封禁状态 5 s TTL 缓存（32 条 LRU），让绝大多数请求 0 次 DB 查询 */
+const BAN_TTL_MS = 5000;
+const BAN_CACHE_MAX = 32;
+const banCache = new Map<number, { banned: boolean; expires: number }>();
+
+export function invalidateBanCache(uid: number): void {
+    banCache.delete(uid);
+}
+
+function isBanned(uid: number): boolean {
+    const now = Date.now();
+    const cached = banCache.get(uid);
+    if (cached && cached.expires > now) {
+        banCache.delete(uid);
+        banCache.set(uid, cached);
+        return cached.banned;
+    }
+
+    const row = queryOne<{ isBanned: number }>('SELECT isBanned FROM users WHERE id = ?', [uid]);
+    const banned = !row || row.isBanned === 1;
+
+    banCache.set(uid, { banned, expires: now + BAN_TTL_MS });
+    while (banCache.size > BAN_CACHE_MAX) {
+        const oldest = banCache.keys().next().value;
+        if (oldest === undefined) break;
+        banCache.delete(oldest);
+    }
+    return banned;
+}
 
 export default (pluginManager: any) => {
     return (req: any, res: any, next: () => Promise<void>) => {
         res.locals.ROLE_LV = ROLE_LV;
-        const token = req.cookies.token;
-        const uid = req.cookies.uid;
+        res.locals.renderMarkdown = renderMarkdown;
 
         const finalize = () => {
-            res.locals.renderMarkdown = (content: string) => {
-                return md.render(content || '');
-            };
             try {
-                const injectedHeaders: string[] = pluginManager.emit('injectHeader', req);
-                const injectedFooters: string[] = pluginManager.emit('injectFooter', req);
-                res.locals.pluginHeader = injectedHeaders.join('\n');
-                res.locals.pluginFooter = injectedFooters.join('\n');
+                if (pluginManager.hasHook('injectHeader')) {
+                    const injectedHeaders: string[] = pluginManager.emit('injectHeader', req);
+                    res.locals.pluginHeader = injectedHeaders.join('\n');
+                } else {
+                    res.locals.pluginHeader = '';
+                }
+                if (pluginManager.hasHook('injectFooter')) {
+                    const injectedFooters: string[] = pluginManager.emit('injectFooter', req);
+                    res.locals.pluginFooter = injectedFooters.join('\n');
+                } else {
+                    res.locals.pluginFooter = '';
+                }
             } catch (e) {
                 logger.error('Error injecting plugin headers/footers', e as Error);
                 res.locals.pluginHeader = '';
@@ -35,58 +62,27 @@ export default (pluginManager: any) => {
         };
 
         try {
-            if (token) {
-                jwt.verify(token, config.JWT_SECRET, (err: any, decoded: any) => {
-                    if (err) {
-                        logger.warn('JWT verification failed: ' + err.message);
-                        req.user = null;
-                        res.clearCookie('token');
-                        res.clearCookie('uid');
-                        res.locals.user = null;
-                        return finalize();
-                    }
+            req.user = null;
+            const token = req.cookies.token;
 
-                    const user = queryOne<any>("SELECT id, username, role, bio, tags, isBanned FROM users WHERE id = ?", [decoded.id]);
-                    if (user && user.isBanned) {
-                        req.user = null;
-                        res.clearCookie('token');
-                        res.clearCookie('uid');
-                    } else if (user) {
-                        req.user = user;
-                        if (req.user.tags) {
-                            try { req.user.tags = JSON.parse(req.user.tags); } catch (_) { req.user.tags = []; }
-                        }
-                        if (String(req.user.id) !== String(uid)) {
-                            res.cookie('uid', req.user.id);
-                        }
-                    } else {
-                        req.user = null;
-                        res.clearCookie('token');
-                        res.clearCookie('uid');
-                    }
-                    res.locals.user = req.user;
-                    finalize();
-                });
-            } else if (uid) {
-                const user = queryOne<any>("SELECT id, username, role, bio, tags, isBanned FROM users WHERE id = ?", [uid]);
-                if (user && user.isBanned) {
-                    req.user = null;
+            if (token) {
+                const payload = verifyToken(token);
+                if (!payload || isBanned(payload.id)) {
+                    res.clearCookie('token');
                     res.clearCookie('uid');
-                } else if (user) {
-                    req.user = user;
-                    if (req.user.tags) {
-                        try { req.user.tags = JSON.parse(req.user.tags); } catch (_) { req.user.tags = []; }
-                    }
-                    const newToken = jwt.sign({ id: user.id, role: user.role }, config.JWT_SECRET, { expiresIn: '1h' });
-                    res.cookie('token', newToken, { httpOnly: true, secure: process.env.NODE_ENV === 'production', maxAge: 3600000 });
+                } else {
+                    req.user = {
+                        id: payload.id,
+                        username: payload.username,
+                        role: payload.role,
+                        bio: payload.bio || '',
+                        tags: [],
+                    };
                 }
-                res.locals.user = req.user;
-                finalize();
-            } else {
-                req.user = null;
-                res.locals.user = null;
-                finalize();
             }
+
+            res.locals.user = req.user;
+            finalize();
         } catch (err) {
             logger.error('Error in global middleware', err as Error);
             req.user = null;

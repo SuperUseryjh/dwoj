@@ -2,6 +2,7 @@ import path from 'path';
 import fs from 'fs';
 import ejs from 'ejs';
 import crypto from 'crypto';
+import * as config from '../config';
 
 // ============================================================
 // 类型定义
@@ -91,6 +92,33 @@ interface MiddlewareEntry {
     handler: Router | RouteHandler;
     isRouter: boolean;
 }
+
+interface CompiledMw {
+    kind: 'mw';
+    prefix: string;
+    handler: RouteHandler;
+}
+
+interface CompiledRoute {
+    kind: 'route';
+    owner: Router;
+    prefix: string;
+    method: string;
+    regex: RegExp;
+    paramNames: string[];
+    handlers: RouteHandler[];
+}
+
+type CompiledStep = CompiledMw | CompiledRoute;
+
+const MIME_MAP: Record<string, string> = {
+    '.css': 'text/css', '.js': 'application/javascript', '.html': 'text/html',
+    '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif', '.svg': 'image/svg+xml', '.ico': 'image/x-icon',
+    '.json': 'application/json', '.woff2': 'font/woff2', '.woff': 'font/woff',
+    '.ttf': 'font/ttf', '.eot': 'application/vnd.ms-fontobject',
+    '.txt': 'text/plain; charset=utf-8', '.map': 'application/json',
+};
 
 // ============================================================
 // Router — 路由管理器
@@ -188,6 +216,7 @@ export class App {
     _pluginManager: any = null;
     _server: any = null;
     _router: Router = new Router();
+    _compiled: CompiledStep[] | null = null;
 
     set(key: string, value: any): void { this._settings[key] = value; }
 
@@ -195,14 +224,26 @@ export class App {
     get(key: string, ...handlers: RouteHandler[]): any {
         if (handlers.length > 0) {
             this._router.get(key, ...handlers);
+            this._compiled = null;
             return;
         }
         return this._settings[key];
     }
 
-    post(path: string, ...handlers: RouteHandler[]): void { this._router.post(path, ...handlers); }
-    put(path: string, ...handlers: RouteHandler[]): void { this._router.put(path, ...handlers); }
-    delete(path: string, ...handlers: RouteHandler[]): void { this._router.delete(path, ...handlers); }
+    post(path: string, ...handlers: RouteHandler[]): void {
+        this._router.post(path, ...handlers);
+        this._compiled = null;
+    }
+
+    put(path: string, ...handlers: RouteHandler[]): void {
+        this._router.put(path, ...handlers);
+        this._compiled = null;
+    }
+
+    delete(path: string, ...handlers: RouteHandler[]): void {
+        this._router.delete(path, ...handlers);
+        this._compiled = null;
+    }
 
     use(...args: any[]): void {
         if (args.length === 1) {
@@ -213,25 +254,58 @@ export class App {
         } else if (args.length === 2) {
             this._middleware.push({ prefix: args[0], handler: args[1], isRouter: args[1] instanceof Router });
         }
+        this._compiled = null;
     }
 
     static(dir: string): RouteHandler {
         const dirPath = path.resolve(dir);
+        const index = new Map<string, { filePath: string; mtime: number; etag: string }>();
+
+        // 启动时建立静态资源索引，请求时不再做 existsSync/statSync
+        const walk = (current: string, urlPrefix: string): void => {
+            for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+                const fullPath = path.join(current, entry.name);
+                const urlPath = `${urlPrefix}/${entry.name}`;
+                if (entry.isDirectory()) {
+                    walk(fullPath, urlPath);
+                } else {
+                    const stat = fs.statSync(fullPath);
+                    index.set(urlPath, {
+                        filePath: fullPath,
+                        mtime: stat.mtimeMs,
+                        etag: `W/"${stat.size.toString(16)}-${Math.round(stat.mtimeMs).toString(16)}"`,
+                    });
+                }
+            }
+        };
+        if (fs.existsSync(dirPath)) walk(dirPath, '');
+
         return async (req: ExtendedRequest, res: ExtendedResponse, next: () => Promise<void>) => {
-            const filePath = path.join(dirPath, '.' + req.path);
-            if (filePath.startsWith(dirPath) && fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
-                const ext = path.extname(filePath).toLowerCase();
-                const mimeMap: Record<string, string> = {
-                    '.css': 'text/css', '.js': 'application/javascript', '.html': 'text/html',
-                    '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
-                    '.gif': 'image/gif', '.svg': 'image/svg+xml', '.ico': 'image/x-icon',
-                    '.json': 'application/json', '.woff2': 'font/woff2', '.woff': 'font/woff',
-                    '.ttf': 'font/ttf', '.eot': 'application/vnd.ms-fontobject',
-                };
-                const file = Bun.file(filePath);
+            const entry = index.get(req.path);
+            if (!entry) {
+                next();
+                return;
+            }
+
+            const clientEtag = req.headers.get('if-none-match');
+            const ifModifiedSince = req.headers.get('if-modified-since');
+            const notModified =
+                (clientEtag !== null && clientEtag === entry.etag) ||
+                (ifModifiedSince !== null && new Date(ifModifiedSince).getTime() >= Math.floor(entry.mtime / 1000) * 1000);
+
+            res._headers['Cache-Control'] = 'public, max-age=86400';
+            res._headers['ETag'] = entry.etag;
+            res._headers['Last-Modified'] = new Date(entry.mtime).toUTCString();
+
+            if (notModified) {
+                res._status = 304;
+                res._body = '';
+                res._sent = true;
+            } else {
+                const ext = path.extname(entry.filePath).toLowerCase();
                 res._status = 200;
-                res._headers['Content-Type'] = mimeMap[ext] || 'application/octet-stream';
-                res._body = file;
+                res._headers['Content-Type'] = MIME_MAP[ext] || 'application/octet-stream';
+                res._body = Bun.file(entry.filePath);
                 res._sent = true;
             }
             next();
@@ -240,17 +314,69 @@ export class App {
 
     async renderView(viewName: string, data: Record<string, any>): Promise<string> {
         const viewPath = path.join(this._viewsDir, viewName.endsWith('.ejs') ? viewName : viewName + '.ejs');
-        if (!fs.existsSync(viewPath)) {
-            throw new Error(`View not found: ${viewPath}`);
+        let template = this._viewCache[viewPath];
+        if (!template) {
+            if (!fs.existsSync(viewPath)) {
+                throw new Error(`View not found: ${viewPath}`);
+            }
+            const content = fs.readFileSync(viewPath, 'utf-8');
+            template = ejs.compile(content, { filename: viewPath, cache: true });
+            this._viewCache[viewPath] = template;
         }
-        const content = fs.readFileSync(viewPath, 'utf-8');
-        const template = ejs.compile(content, { filename: viewPath });
         return template(data);
     }
 
+    /** 启动/注册变更后摊平路由与中间件，避免每请求递归重建 */
+    private _compileRoutes(): CompiledStep[] {
+        const steps: CompiledStep[] = [];
+
+        const addRouter = (router: Router, prefix: string): void => {
+            for (const route of router._routes) {
+                steps.push({
+                    kind: 'route',
+                    owner: router,
+                    prefix,
+                    method: route.method,
+                    regex: route.regex,
+                    paramNames: route.paramNames,
+                    handlers: route.handlers,
+                });
+            }
+            for (const sub of router._subRouters) addRouter(sub, prefix);
+            for (const mw of router._middleware) steps.push({ kind: 'mw', prefix, handler: mw });
+        };
+
+        for (const entry of this._middleware) {
+            if (entry.isRouter && entry.handler instanceof Router) {
+                addRouter(entry.handler, entry.prefix);
+            } else if (typeof entry.handler === 'function') {
+                steps.push({ kind: 'mw', prefix: entry.prefix, handler: entry.handler as RouteHandler });
+            }
+        }
+
+        // app.get/post/put/delete 注册的路由优先匹配
+        const appRouterSteps: CompiledStep[] = [];
+        for (const route of this._router._routes) {
+            appRouterSteps.push({
+                kind: 'route',
+                owner: this._router,
+                prefix: '/',
+                method: route.method,
+                regex: route.regex,
+                paramNames: route.paramNames,
+                handlers: route.handlers,
+            });
+        }
+        return [...appRouterSteps, ...steps];
+    }
+
     listen(port: number, callback?: () => void): any {
+        this._compiled = this._compileRoutes();
         this._server = Bun.serve({
             port,
+            maxRequestBodySize: config.MAX_BODY_SIZE,
+            development: false,
+            idleTimeout: 30,
             fetch: (req: Request) => this._handleRequest(req),
         });
         if (callback) callback();
@@ -262,10 +388,21 @@ export class App {
         const method = request.method.toUpperCase();
         const pathname = url.pathname;
 
+        const contentType = request.headers.get('content-type') || '';
+
+        // ---- 请求体大小前置检查（同时在 Bun.serve 层限制 8 MB）----
+        if (method === 'POST' || method === 'PUT') {
+            const declaredLength = Number(request.headers.get('content-length') || 0);
+            const isMultipart = contentType.includes('multipart/form-data');
+            const limit = isMultipart ? config.MAX_BODY_SIZE : config.URLENCODED_BODY_LIMIT;
+            if (declaredLength > limit) {
+                return new Response('Payload Too Large', { status: 413 });
+            }
+        }
+
         // ---- 解析请求体 ----
         let body: Record<string, any> = {};
         const files: Record<string, File> = {};
-        const contentType = request.headers.get('content-type') || '';
 
         if (method === 'POST' || method === 'PUT') {
             if (contentType.includes('multipart/form-data') || contentType.includes('application/x-www-form-urlencoded')) {
@@ -393,37 +530,37 @@ export class App {
             }
         };
 
-        // ---- 收集所有中间件和处理函数 ----
-        const allMiddleware: MiddlewareEntry[] = [
-            // 通过 app.get/post/put/delete 注册的路由优先匹配
-            { prefix: '/', handler: this._router, isRouter: true },
-            ...this._middleware,
-        ];
+        // ---- 匹配预编译路由（启动时已摊平）----
+        if (!this._compiled) this._compiled = this._compileRoutes();
+        const matchedRouters = new Set<Router>();
 
-        for (const mw of allMiddleware) {
-            if (mw.isRouter && mw.handler instanceof Router) {
-                const router = mw.handler;
-                const relPath = pathname.startsWith(mw.prefix)
-                    ? '/' + pathname.slice(mw.prefix.length).replace(/^\/+/, '')
-                    : null;
-
-                if (relPath !== null) {
-                    const match = router._match(method, relPath);
-                    if (match) {
-                        req.params = match.params;
-                        handlers.push(...match.handlers);
-                        continue;
-                    }
-                    handlers.push(...router._middleware);
-                    for (const sub of router._subRouters) {
-                        allMiddleware.push({ prefix: mw.prefix, handler: sub, isRouter: true });
-                    }
-                }
-            } else if (typeof mw.handler === 'function') {
-                if (mw.prefix === '/' || pathname.startsWith(mw.prefix)) {
-                    handlers.push(mw.handler as RouteHandler);
-                }
+        for (const step of this._compiled) {
+            if (step.kind === 'mw') {
+                if (step.prefix === '/' || pathname.startsWith(step.prefix)) handlers.push(step.handler);
+                continue;
             }
+
+            if (step.method !== method || matchedRouters.has(step.owner)) continue;
+
+            let relPath: string;
+            if (step.prefix === '/') {
+                relPath = pathname;
+            } else if (pathname.startsWith(step.prefix)) {
+                relPath = '/' + pathname.slice(step.prefix.length).replace(/^\/+/, '');
+            } else {
+                continue;
+            }
+
+            const m = relPath.match(step.regex);
+            if (!m) continue;
+
+            matchedRouters.add(step.owner);
+            const params: RequestParams = {};
+            step.paramNames.forEach((name, i) => {
+                params[name] = decodeURIComponent(m[i + 1]);
+            });
+            req.params = params;
+            handlers.push(...step.handlers);
         }
 
         // ---- 执行处理链 ----
@@ -461,6 +598,11 @@ export class App {
         const responseHeaders: Record<string, string | string[]> = { ...res._headers };
         if (res._cookies.length > 0) {
             responseHeaders['Set-Cookie'] = res._cookies;
+        }
+
+        // 304/204 不允许携带 body
+        if (res._status === 304 || res._status === 204) {
+            return new Response(null, { status: res._status, headers: responseHeaders as any });
         }
 
         if (res._body instanceof Blob) {

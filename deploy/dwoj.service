@@ -1,0 +1,23 @@
+[Unit]
+Description=DWOJ Lite（1 核 / 128 MB）
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/dwoj
+EnvironmentFile=/opt/dwoj/deploy/lowmem.env
+ExecStart=/usr/bin/bun --smol app.ts
+Restart=always
+RestartSec=2
+User=dwoj
+Group=dwoj
+NoNewPrivileges=true
+PrivateTmp=true
+
+# 内存护栏：超过 80 MB 开始回收，96 MB 硬上限
+MemoryHigh=80M
+MemoryMax=96M
+OOMScoreAdjust=200
+
+[Install]
+WantedBy=multi-user.target

@@ -268,3 +268,16 @@ scripts/
 ## 11. 与 main 分支的关系
 
 main 已走多进程 IPC + v86 沙箱路线（内存 170 MB+），本分支**不合并 main 的架构改动**，只选择性回填判题相关修复（若 main 的 `lib/judge/*` 有更完整的判定逻辑，可参考其 `compare.ts` 思路，但实现保持单进程）。
+
+---
+
+## 12. 实施进度
+
+| 阶段 | 状态 | 完成内容 | 备注 |
+|---|---|---|---|
+| **P0 壳** | ✅ 完成 | `start:lowmem`（`bun --smol`）；`Bun.serve` 增加 `maxRequestBodySize`/`development:false`/`idleTimeout`；新增 `deploy/dwoj.service`、`deploy/lowmem.env`、`deploy/run.sh`；`lib/logger.ts` 改为 5×5 MB 按大小轮转且默认只写文件（`DWOJ_LOG_CONSOLE=1` 才回显）；删除 `data/sandbox/`；`config/index.ts` 新增 `LOWMEM`、`MAX_BODY_SIZE`、`STATUS_PAGE_SIZE`、`JUDGE_QUEUE_LIMIT`、`BLOB_THRESHOLD` 等常量 | 未跑测试 |
+| **P1 判题修复** | ✅ 完成 | 新增 `lib/judge/{queue,runner,compare}.ts`：`/submit` 入库后入队（积压 ≥ 50 直接 503），单飞 FIFO 并发 1，`recover()` 启动恢复 Pending/Running；per-case `spawn` 改为流式 stdin（`createReadStream`）+ stdout 1 MB 上限（OLE）+ 单点 2 s / 整场 10 s 时限 + POSIX `ulimit -v 262144 -t 5 -f 8192` + `detached` 进程组 `kill(-pid)`；缺 `.out` 判 Data Error；`errorInfo` 列已补入建表语句并做旧库 `ALTER TABLE` 迁移；临时目录改 `data/judge_tmp/<uuid>/` 且 `finally` 清理；`controllers/judge.ts` 保留为薄封装；新增 `tests/judge.test.ts`（未执行） | 未跑测试 |
+| **P2 依赖减法** | ✅ 完成 | C1 删除 `lib/updater.ts`，`app.ts` 启动不再联网、`config` 移除 UPDATE_* 常量；C2 删除 `dwoj-cli.ts` 与 `package.json#bin`，CI 去掉 CLI 编译与拷贝；C3 新增 `lib/auth-token.ts`（HMAC-SHA256 自签 `<body>.<sig>`，payload 含 `id/username/role/bio/exp`），登录/资料页改用自签 token，全局中间件改为直接读 token + `isBanned` 5 s TTL（32 条 LRU）并支持封禁即时失效；C4 新增 `lib/fs-utils.ts`（`ensureDirSync/emptyDirSync/moveSync/removeSync`）替换全部 `fs-extra`；C5 新增 `lib/markdown.ts` 极简渲染（段落/粗体/行内代码/链接/换行）替换 `markdown-it`；C6 删除 `roles` 建表与种子、`/admin/addRole`、`/admin/tag`，`views/admin.ejs` 去掉 Tag 列；运行时依赖收敛为 `ejs + adm-zip` | 未跑测试；旧 JWT cookie 失效需重新登录 |
+| **P4 存储与热路径** | ✅ 完成 | SQLite：`DWOJ_LOWMEM=1` 时切换 `journal_mode=DELETE`/`synchronous=OFF`/`cache_size=-256`/`mmap_size=0`/`temp_store=FILE`；新增 `lib/blobs.ts`，`execute` 参数 >4 KB 自动外置为 `@blob:<sha256>`（`data/blobs/`），`query/queryOne` 读取时统一解引用、缺失回退空串；新增 `transaction`；补充 `submissions(problemId,id)`、`threads(nodeId,id)` 索引。热路径：`renderView` 使用 `_viewCache` + `ejs.compile({cache:true})`；路由/中间件在 `listen` 时摊平为 `CompiledStep[]`（注册后自动失效重编译，404 快路径）；静态资源启动建索引 + `ETag`/`Last-Modified`/`Cache-Control: max-age=86400`/304；`Content-Length` 前置检查（urlencoded 256 KB、multipart 8 MB → 413）；`/status` 只取展示列 + 分页 50 + 手动刷新；`adm-zip` 改惰性 `import()` + 20 MB 上限 413 | 未跑测试 |
+| **P3 插件瘦身** | ✅ 完成 | 重写 `lib/plugin_system.ts`：删除 `_createPermissionProxy`/`_checkPermission`/token 鉴权与审计日志，插件直接拿到 `oj`/`db`；启停状态从 `plugin_configs` 表迁到 `plugins/config.json`（不再查库）；`emit` 走 `_enabledPlugins` + `_enabledHooks` 短路，无启用插件时零遍历；`middleware/global.ts` 仅在 `hasHook('injectHeader'/'injectFooter')` 时计算注入；`db-monitor` 默认不启用（`ENABLED_BUILTIN_PLUGINS` 默认空）；插件上传 256 KB 限制；`types.d.ts` 同步精简；`tests/plugin_system.test.ts` 重写（去除权限代理用例，改为 config.json 驱动） | 未跑测试 |
+| **P5 验收与文档** | ✅ 完成 | 新增 `scripts/mem_watch.sh`（30s 采 `VmRSS`，>100 MB 告警）与 `scripts/loadtest.ts`（20 并发压测首页/状态/讨论区/题目，输出 P50/P95/P99）；重写 `README.md`（1 核 128 MB 部署、环境变量、功能裁剪对照表、评测机制、v86 不支持声明、目录结构）；重写 `plugin.md` 以匹配 P3 后的插件 API；`package.json` 与 `config.CURRENT_VERSION` → `3.1.0-lite` | 未执行 `bun test` / `tsc` / 压测（按要求跳过测试） |

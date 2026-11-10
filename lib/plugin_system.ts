@@ -1,74 +1,27 @@
-import fs from 'fs-extra';
+import fs from 'fs';
 import path from 'path';
-import crypto from 'crypto';
 import logger from './logger';
-import { queryOne, execute } from './database';
 
-// New Plugin class
+/** 插件实例：直接注入 oj / db（插件 = 可信代码，不做权限代理） */
 class Plugin {
     module: Record<string, any>;
     oj: any;
     db: any;
-    token: string;
-    permissions: Set<string>;
     exports: any;
     pluginSystem: PluginSystem;
-    ojProxy: any;
-    dbProxy: any;
 
-    constructor(pluginModule: any, oj: any, db: any, token: string, permissions: string[], pluginSystemRef: PluginSystem) {
+    constructor(pluginModule: any, oj: any, db: any, pluginSystemRef: PluginSystem) {
         this.module = pluginModule;
         this.oj = oj;
         this.db = db;
-        this.token = token;
-        this.permissions = new Set(permissions || []);
         this.exports = pluginModule.exports || {};
         this.pluginSystem = pluginSystemRef;
-
-        this.ojProxy = this._createPermissionProxy(this.oj, 'oj');
-        this.dbProxy = this._createPermissionProxy(this.db, 'db');
-    }
-
-    _checkPermission(resource: string, action: string, permissionToCheck?: string): void {
-        const actualPermission = permissionToCheck || `${resource}_${action}`;
-        if (!this.permissions.has(actualPermission)) {
-            this.oj.logger.warn(`[Plugin] Plugin with token ${this.token} attempted unauthorized action: ${actualPermission}`);
-            throw new Error(`Unauthorized action: ${actualPermission}`);
-        }
-    }
-
-    _createPermissionProxy(target: any, resourceName: string): any {
-        const self = this;
-        return new Proxy(target, {
-            get(target: any, prop: string | symbol, receiver: any) {
-                if (resourceName === 'db') {
-                    if (typeof target[prop] === 'function') {
-                        const action = String(prop).startsWith('get') || String(prop).startsWith('all') || String(prop).startsWith('each') ? 'read' : 'write';
-                        const permissionToCheck = `${action}_${resourceName}`;
-                        self._checkPermission(resourceName, action, permissionToCheck);
-                        return target[prop].bind(target);
-                    }
-                    return Reflect.get(target, prop, receiver);
-                } else if (resourceName === 'oj') {
-                    if (prop === 'app' || prop === 'config' || prop === 'logger') {
-                        return Reflect.get(target, prop, receiver);
-                    }
-                    self._checkPermission(resourceName, 'access');
-                    return Reflect.get(target, prop, receiver);
-                }
-                return Reflect.get(target, prop, receiver);
-            },
-            apply(target: any, thisArg: any, argumentsList: any[]) {
-                self._checkPermission(resourceName, 'execute');
-                return Reflect.apply(target, thisArg, argumentsList);
-            }
-        });
     }
 
     executeHook(hookName: string, ...args: any[]): any {
         if (typeof this.module[hookName] === 'function') {
             const getPluginExports = (pluginName: string) => this.pluginSystem.getPluginExports(pluginName);
-            return this.module[hookName](this.ojProxy, this.dbProxy, getPluginExports, ...args);
+            return this.module[hookName](this.oj, this.db, getPluginExports, ...args);
         }
         return null;
     }
@@ -81,9 +34,11 @@ export interface PluginInfo {
     name: string;
     description: string;
     version: string;
-    token: string;
-    permissions: string[];
     builtin?: boolean;
+}
+
+interface PluginState {
+    enabled?: boolean;
 }
 
 class PluginSystem {
@@ -94,6 +49,10 @@ class PluginSystem {
     app: any;
     pluginExports: Record<string, any> = {};
     private _builtinEnabled: Set<string> = new Set();
+    private _enabledPlugins: PluginInfo[] = [];
+    private _configPath: string;
+    private _state: Record<string, PluginState> = {};
+    private _enabledHooks: Set<string> = new Set();
 
     constructor(pluginDir: string, ojRef: any, enabledBuiltins: string[] = []) {
         this.pluginDir = pluginDir;
@@ -103,14 +62,45 @@ class PluginSystem {
         this.app = ojRef.app;
         this.pluginExports = {};
         this._builtinEnabled = new Set(enabledBuiltins.filter(Boolean));
+        this._configPath = path.join(pluginDir, 'config.json');
 
-        fs.ensureDirSync(pluginDir);
+        fs.mkdirSync(pluginDir, { recursive: true });
+        this._loadState();
+    }
+
+    /** 启停状态存放于 plugins/config.json，不再查库 */
+    private _loadState(): void {
+        try {
+            if (fs.existsSync(this._configPath)) {
+                this._state = JSON.parse(fs.readFileSync(this._configPath, 'utf-8')) || {};
+            }
+        } catch (e) {
+            logger.error('[PluginSystem] Failed to read config.json', e as Error);
+            this._state = {};
+        }
+    }
+
+    private _saveState(): void {
+        try {
+            fs.writeFileSync(this._configPath, JSON.stringify(this._state, null, 2));
+        } catch (e) {
+            logger.error('[PluginSystem] Failed to write config.json', e as Error);
+        }
+    }
+
+    private _isEnabled(filename: string, fallback: boolean): boolean {
+        const state = this._state[filename];
+        return state ? !!state.enabled : fallback;
     }
 
     async loadAll(): Promise<void> {
+        if (!fs.existsSync(this.pluginDir)) fs.mkdirSync(this.pluginDir, { recursive: true });
         const files = fs.readdirSync(this.pluginDir).filter((f: string) => f.endsWith('.js'));
         this.plugins = {};
         this.pluginExports = {};
+        this._enabledPlugins = [];
+        this._enabledHooks = new Set();
+        let stateChanged = false;
 
         for (const file of files) {
             const fullPath = path.join(this.pluginDir, file);
@@ -119,22 +109,14 @@ class PluginSystem {
                 const pluginModule = require(fullPath);
 
                 const manifest = pluginModule.manifest || {};
-                const requestedPermissions = manifest.permissions || [];
+                const isEnabled = this._isEnabled(file, false);
 
-                const dbConfig = queryOne("SELECT enabled, token, permissions FROM plugin_configs WHERE filename = ?", [file]);
-
-                let isEnabled = dbConfig ? (dbConfig.enabled === 1) : false;
-                let token = dbConfig ? dbConfig.token : crypto.randomBytes(16).toString('hex');
-                let grantedPermissions = dbConfig && dbConfig.permissions ? JSON.parse(dbConfig.permissions) : requestedPermissions;
-
-                this.oj.logger.info(`[PluginSystem] Loading ${file}: dbConfig = ${JSON.stringify(dbConfig)}, grantedPermissions = ${JSON.stringify(grantedPermissions)}`);
-
-                if (!dbConfig || !dbConfig.token) {
-                    execute("INSERT OR REPLACE INTO plugin_configs (filename, enabled, token, permissions) VALUES (?, ?, ?, ?)",
-                        [file, isEnabled ? 1 : 0, token, JSON.stringify(grantedPermissions)]);
+                if (!this._state[file]) {
+                    this._state[file] = { enabled: isEnabled };
+                    stateChanged = true;
                 }
 
-                const wrappedPlugin = new Plugin(pluginModule, this.oj, this.db, token, grantedPermissions, this);
+                const wrappedPlugin = new Plugin(pluginModule, this.oj, this.db, this);
 
                 this.plugins[file] = {
                     module: wrappedPlugin,
@@ -143,26 +125,46 @@ class PluginSystem {
                     name: manifest.name || file,
                     description: manifest.description || '',
                     version: manifest.version || '1.0.0',
-                    token: token,
-                    permissions: grantedPermissions
                 };
 
                 if (isEnabled) {
                     this.pluginExports[manifest.name || file] = wrappedPlugin.exports;
-                }
+                    this._collectHooks(pluginModule);
 
-                if (isEnabled && typeof pluginModule.onRoute === 'function') {
-                    logger.info(`[Plugin] Hot-registering routes for ${file}`);
-                    wrappedPlugin.executeHook('onRoute', this.app);
+                    if (typeof pluginModule.onLoad === 'function') {
+                        wrappedPlugin.executeHook('onLoad');
+                    }
+                    if (typeof pluginModule.onRoute === 'function') {
+                        logger.info(`[Plugin] Registering routes for ${file}`);
+                        wrappedPlugin.executeHook('onRoute', this.app);
+                    }
                 }
-
             } catch (e) {
                 logger.error(`[Plugin] Failed to load ${file}:`, e as Error);
             }
         }
 
-        // 加载内置插件
+        // 加载内置插件（默认不启用）
         this._loadBuiltinPlugins();
+
+        this._refreshEnabled();
+        if (stateChanged) this._saveState();
+    }
+
+    private _collectHooks(pluginModule: Record<string, any>): void {
+        // 记录所有导出函数名，用于 emit 的零开销短路
+        for (const key of Object.keys(pluginModule)) {
+            if (typeof pluginModule[key] === 'function') this._enabledHooks.add(key);
+        }
+    }
+
+    private _refreshEnabled(): void {
+        this._enabledPlugins = Object.values(this.plugins).filter(p => p.enabled);
+    }
+
+    /** 是否存在已启用插件实现了某个钩子（用于零开销短路） */
+    hasHook(hookName: string): boolean {
+        return this._enabledHooks.has(hookName);
     }
 
     /** 内置插件注册表 */
@@ -182,13 +184,16 @@ class PluginSystem {
 
         for (const [name, pluginModule] of Object.entries(registry)) {
             const manifest = pluginModule.manifest || {};
-            const isEnabled = this._builtinEnabled.has(name);
-            const token = `builtin:${name}`;
-            const permissions = manifest.permissions || [];
-
-            const wrappedPlugin = new Plugin(pluginModule, this.oj, this.db, token, permissions, this);
-
             const filename = `builtin:${name}`;
+            const isEnabled = this._isEnabled(filename, this._builtinEnabled.has(name));
+
+            if (!this._state[filename]) {
+                this._state[filename] = { enabled: isEnabled };
+                this._saveState();
+            }
+
+            const wrappedPlugin = new Plugin(pluginModule, this.oj, this.db, this);
+
             this.plugins[filename] = {
                 module: wrappedPlugin,
                 filename,
@@ -196,18 +201,17 @@ class PluginSystem {
                 name: manifest.name || name,
                 description: manifest.description || '',
                 version: manifest.version || '1.0.0',
-                token,
-                permissions,
                 builtin: true,
             };
 
             if (isEnabled) {
+                this._collectHooks(pluginModule);
                 if (typeof pluginModule.onLoad === 'function') {
                     wrappedPlugin.executeHook('onLoad');
                 }
                 this.pluginExports[manifest.name || name] = wrappedPlugin.exports;
                 if (typeof pluginModule.onRoute === 'function') {
-                    logger.info(`[Plugin] Hot-registering routes for builtin:${name}`);
+                    logger.info(`[Plugin] Registering routes for builtin:${name}`);
                     wrappedPlugin.executeHook('onRoute', this.app);
                 }
             }
@@ -218,18 +222,19 @@ class PluginSystem {
         return this.pluginExports[pluginName];
     }
 
+    /** 无启用插件时直接返回空数组，避免每请求遍历 */
     emit(hookName: string, ...args: any[]): any[] {
+        if (this._enabledPlugins.length === 0 || !this._enabledHooks.has(hookName)) return [];
+
         const results: any[] = [];
-        Object.values(this.plugins).forEach(p => {
-            if (p.enabled) {
-                try {
-                    const res = p.module.executeHook(hookName, ...args);
-                    if (res) results.push(res);
-                } catch (e) {
-                    logger.error(`[Plugin Error] [${p.name || p.filename}] [${hookName}]:`, e as Error);
-                }
+        for (const p of this._enabledPlugins) {
+            try {
+                const res = p.module.executeHook(hookName, ...args);
+                if (res) results.push(res);
+            } catch (e) {
+                logger.error(`[Plugin Error] [${p.name || p.filename}] [${hookName}]:`, e as Error);
             }
-        });
+        }
         return results;
     }
 
@@ -242,29 +247,29 @@ class PluginSystem {
                 desc: p.description,
                 version: p.version,
                 enabled: p.enabled,
-                token: p.token,
-                permissions: p.permissions,
                 builtin: p.builtin || false,
             });
         });
         const loadedFiles = new Set(Object.keys(this.plugins).filter(k => !k.startsWith('builtin:')));
-        const allFiles = fs.readdirSync(this.pluginDir).filter((f: string) => f.endsWith('.js'));
-        allFiles.forEach(f => {
-            if (!loadedFiles.has(f)) {
-                list.push({ filename: f, name: "Unknown/Error", enabled: false, builtin: false });
-            }
-        });
+        if (fs.existsSync(this.pluginDir)) {
+            const allFiles = fs.readdirSync(this.pluginDir).filter((f: string) => f.endsWith('.js'));
+            allFiles.forEach(f => {
+                if (!loadedFiles.has(f)) {
+                    list.push({ filename: f, name: "Unknown/Error", enabled: false, builtin: false });
+                }
+            });
+        }
         return list;
     }
 
     async toggle(filename: string, enabled: boolean): Promise<void> {
+        this._state[filename] = { enabled };
+        this._saveState();
+
         if (filename.startsWith('builtin:')) {
             const name = filename.slice('builtin:'.length);
             if (enabled) this._builtinEnabled.add(name);
             else this._builtinEnabled.delete(name);
-        } else {
-            const enabledValue = enabled ? 1 : 0;
-            execute("UPDATE plugin_configs SET enabled = ? WHERE filename = ?", [enabledValue, filename]);
         }
         await this.loadAll();
     }
@@ -282,7 +287,8 @@ class PluginSystem {
                 logger.error(`Error deleting plugin file ${p}`, e as Error);
             }
         }
-        execute("DELETE FROM plugin_configs WHERE filename = ?", [filename]);
+        delete this._state[filename];
+        this._saveState();
         await this.loadAll();
     }
 }

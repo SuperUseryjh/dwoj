@@ -2,25 +2,49 @@ import fs from 'fs';
 import path from 'path';
 
 const logDir: string = path.join(__dirname, '..', 'log');
+fs.mkdirSync(logDir, { recursive: true });
 
-if (!fs.existsSync(logDir)) {
-    fs.mkdirSync(logDir);
+const LOG_MAX_SIZE = 5 * 1024 * 1024;
+const LOG_MAX_FILES = 5;
+const logFilePath: string = path.join(logDir, 'app.log');
+
+/** 生产默认只写文件；DWOJ_LOG_CONSOLE=1 时同时回显到控制台 */
+const consoleEnabled: boolean = process.env.DWOJ_LOG_CONSOLE === '1';
+
+let logStream: fs.WriteStream = fs.createWriteStream(logFilePath, { flags: 'a' });
+let currentSize = 0;
+try { currentSize = fs.statSync(logFilePath).size; } catch { /* 文件不存在 */ }
+
+function rotate(): void {
+    try { logStream.end(); } catch { /* ignore */ }
+    for (let i = LOG_MAX_FILES - 1; i > 0; i--) {
+        const src = i === 1 ? logFilePath : `${logFilePath}.${i - 1}`;
+        const dst = `${logFilePath}.${i}`;
+        if (fs.existsSync(src)) {
+            try { fs.renameSync(src, dst); } catch { /* ignore */ }
+        }
+    }
+    logStream = fs.createWriteStream(logFilePath, { flags: 'a' });
+    currentSize = 0;
 }
 
-const getLogFileName = (): string => {
-    const now = new Date();
-    const year = now.getFullYear();
-    const month = String(now.getMonth() + 1).padStart(2, '0');
-    const day = String(now.getDate()).padStart(2, '0');
-    const hours = String(now.getHours()).padStart(2, '0');
-    const minutes = String(now.getMinutes()).padStart(2, '0');
-    const seconds = String(now.getSeconds()).padStart(2, '0');
-    return `app_${year}${month}${day}_${hours}${minutes}${seconds}.log`;
-};
+function write(level: string, message: string, stack?: string): void {
+    const line = `[${level}] ${new Date().toISOString()}: ${message}\n`;
+    const extra = stack ? stack + '\n' : '';
+    if (currentSize + Buffer.byteLength(line) + Buffer.byteLength(extra) > LOG_MAX_SIZE) {
+        rotate();
+    }
+    logStream.write(line);
+    if (stack) logStream.write(extra);
+    currentSize += Buffer.byteLength(line) + Buffer.byteLength(extra);
 
-const logFileName: string = getLogFileName();
-const logFilePath: string = path.join(logDir, logFileName);
-const logStream: fs.WriteStream = fs.createWriteStream(logFilePath, { flags: 'a' });
+    if (consoleEnabled) {
+        const out = (line + (stack || '')).trimEnd();
+        if (level === 'ERROR') console.error(out);
+        else if (level === 'WARN') console.warn(out);
+        else console.log(out);
+    }
+}
 
 export interface Logger {
     info: (message: string) => void;
@@ -29,31 +53,13 @@ export interface Logger {
 }
 
 const logger: Logger = {
-    info: (message: string) => {
-        const timestamp = new Date().toISOString();
-        const logMessage = `[INFO] ${timestamp}: ${message}\n`;
-        console.log(logMessage.trim());
-        logStream.write(logMessage);
-    },
-    warn: (message: string) => {
-        const timestamp = new Date().toISOString();
-        const logMessage = `[WARN] ${timestamp}: ${message}\n`;
-        console.warn(logMessage.trim());
-        logStream.write(logMessage);
-    },
-    error: (message: string, error?: Error) => {
-        const timestamp = new Date().toISOString();
-        const errorMessage = `[ERROR] ${timestamp}: ${message}\n`;
-        console.error(errorMessage.trim());
-        logStream.write(errorMessage);
-        if (error?.stack) {
-            logStream.write(error.stack + '\n');
-        }
-    }
+    info: (message: string) => write('INFO', message),
+    warn: (message: string) => write('WARN', message),
+    error: (message: string, error?: Error) => write('ERROR', message, error?.stack),
 };
 
 process.on('exit', () => {
-    logStream.end();
+    try { logStream.end(); } catch { /* ignore */ }
 });
 
 export default logger;

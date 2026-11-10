@@ -4,7 +4,7 @@
     <div class="col-md-8">
         <h4>用户管理</h4>
         <table class="table table-sm table-bordered">
-            <thead><tr><th>ID</th><th>用户</th><th>组</th><th>Tag</th><th>封号</th><th>操作</th></tr></thead>
+            <thead><tr><th>ID</th><th>用户</th><th>组</th><th>封号</th></tr></thead>
             <tbody>
                 <% users.forEach(u => { %>
                 <tr>
@@ -12,20 +12,12 @@
                     <td><%= u.username %> <% if(u.isBanned){ %><span class="badge bg-danger">BANNED</span><% } %></td>
                     <td><%= u.role %></td>
                     <td>
-                        <% if(u.tags) u.tags.forEach(t=>{ %> <span class="badge bg-info"><%= t %></span> <% }) %>
-                        <form action="/admin/tag" method="POST" class="d-inline">
-                            <input type="hidden" name="uid" value="<%= u.id %>">
-                            <input type="text" name="tag" size="5" placeholder="add tag">
-                        </form>
-                    </td>
-                    <td>
                         <% if(!u.isBanned){ %>
                         <form action="/admin/ban" method="POST"><input type="hidden" name="uid" value="<%= u.id %>"><button class="btn btn-xs btn-danger">Ban</button></form>
                         <% } else { %>
                         <form action="/admin/unban" method="POST"><input type="hidden" name="uid" value="<%= u.id %>"><button class="btn btn-xs btn-success">Unban</button></form>
                         <% } %>
                     </td>
-                    <td>...</td>
                 </tr>
                 <% }) %>
             </tbody>
