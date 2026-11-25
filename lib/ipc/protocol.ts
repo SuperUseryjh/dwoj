@@ -3,7 +3,7 @@
  *
  * 拓扑是「星型」：所有子进程只和主进程（broker）说话，由 broker 按 `to` 转发。
  *   http ──┐
- *   judge ─┼──► broker ──► db
+ *   judge ─┼──► broker ──► db / plugin
  *   db ◄───┘
  *
  * 消息类型：
@@ -13,7 +13,7 @@
  *   event  通知（不需要响应）
  */
 
-export type Role = 'broker' | 'db' | 'http' | 'judge';
+export type Role = 'broker' | 'db' | 'plugin' | 'http' | 'judge';
 
 export interface Envelope {
     kind: 'ready' | 'call' | 'reply' | 'event' | 'shutdown';

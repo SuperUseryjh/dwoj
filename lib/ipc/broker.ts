@@ -28,6 +28,7 @@ interface Child {
 
 const ENTRY_FILES: Record<Exclude<Role, 'broker'>, string[]> = {
     db: ['..', 'db', 'db_service'],
+    plugin: ['..', 'plugin', 'plugin_service'],
     http: ['..', 'http', 'http_service'],
     judge: ['..', 'judge', 'judge_service'],
 };
@@ -53,8 +54,10 @@ export class Broker {
     // ------------------------------------------------------------
 
     async start(): Promise<void> {
-        // 数据库必须先就绪：http / judge 启动就会查库（迁移、重新排队等）
+        // 数据库必须先就绪：plugin 加载插件、http / judge 启动都会查库
         await this.spawnAndWait('db');
+        // 插件进程要在 http / judge 之前就绪：后者依赖它的钩子与插件路由
+        await this.spawnAndWait('plugin');
         await Promise.all([this.spawnAndWait('http'), this.spawnAndWait('judge')]);
         logger.info('all services are up');
     }

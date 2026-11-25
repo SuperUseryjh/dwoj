@@ -5,8 +5,7 @@ const logger = createLogger('judge');
 // judge 进程本身就是「评测进程」，沙箱直接跑在这里，
 // 不需要再套一层 RemoteBackend 工作进程。
 if (process.env.JUDGE_WORKER === undefined) process.env.JUDGE_WORKER = '0';
-import { App } from '../bun-http';
-import PluginSystem from '../plugin_system';
+import { RemotePluginHost } from '../plugin/host';
 import { createLogger } from '../logger';
 import { reportReady, startChild } from '../ipc/node';
 import { getBackend } from './backend';
@@ -17,8 +16,7 @@ import { enqueueJudge, getSupportedLanguages, initJudge, isJudging } from '../..
  *
  * - 数据库读写通过 IPC 走 db 进程；
  * - HTTP 进程只发一条 `enqueue` 通知，不关心评测细节；
- * - 这里也加载插件系统，保证 beforeJudge / afterJudge 钩子照常触发
- *   （插件里的 onRoute 注册的路由不会被访问，页面路由在 HTTP 进程）。
+ * - 插件钩子通过 IPC 交给 plugin 进程执行，judge 进程自身不再加载插件代码。
  */
 
 async function main(): Promise<void> {
@@ -47,14 +45,8 @@ async function main(): Promise<void> {
         },
     });
 
-    // 评测只有 Python/C++/Node 的代码，不需要真实的 HTTP 应用；
-    // 这里用一个空 App 满足插件系统对 `oj.app` 的接口要求。
-    const app = new App();
-    const database = require('../database');
-    const oj = { app, db: database.db, config, logger: createLogger('plugin') };
-    const pluginManager = new PluginSystem(config.PLUGINS_DIR, oj, config.ENABLED_BUILTIN_PLUGINS);
-    await pluginManager.loadAll();
-
+    // 插件只在 plugin 进程里加载，这里只保留一个 IPC 客户端
+    const pluginManager = new RemotePluginHost();
     await initJudge(pluginManager);
 
     reportReady({

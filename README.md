@@ -31,6 +31,7 @@ dwoj/
 ├── lib/
 │   ├── ipc/            (进程编排 broker + 子进程 IPC 节点)
 │   ├── db/             (数据库驱动: Bun.SQL / 远程 IPC 驱动 / db 进程)
+│   ├── plugin/         (plugin 进程入口 + http/judge 侧的插件宿主客户端)
 │   ├── http/           (HTTP 进程入口)
 │   ├── judge/          (评测后端: v86 沙箱 / 本机进程 / 队列)
 │   ├── bun-http.ts     (HTTP 服务器框架)
@@ -61,7 +62,7 @@ dwoj/
    ```
    如果看到 DWOJ 的 ASCII 横幅（包含版本号、监听地址、评测后端与日志文件名），
    并在最后打出 `DWOJ 4.0.0 running in multi-process mode on port 3000`，说明启动成功
-   （日志里还会依次出现 `db ready` / `http ready` / `judge ready`）。
+   （日志里还会依次出现 `db ready` / `plugin ready` / `http ready` / `judge ready`）。
 
    *开发模式（文件修改后自动重启）：*
    ```bash
@@ -84,20 +85,24 @@ dwoj/
 ```text
             ┌───────────────── broker (app.ts) ─────────────────┐
             │  拉起/重启子进程 · 按 {to} 转发消息 · 优雅关闭    │
-            └───┬──────────────────┬───────────────────┬────────┘
-                │ NDJSON           │ NDJSON            │ NDJSON
-        ┌───────▼───────┐  ┌───────▼───────┐  ┌────────▼────────┐
-        │      db       │  │     http      │  │      judge      │
-        │ 唯一持有数据库 │  │ Bun.serve/EJS │  │ 队列 + 沙箱后端  │
-        └───────────────┘  └───────────────┘  └─────────────────┘
+            └──┬──────────────┬──────────────┬──────────────┬──┘
+               │ NDJSON       │ NDJSON       │ NDJSON       │ NDJSON
+       ┌───────▼───────┐ ┌────▼────────┐ ┌───▼─────────┐ ┌──▼────────────┐
+       │      db       │ │   plugin    │ │    http     │ │     judge     │
+       │ 唯一持有数据库│ │ 加载插件    │ │ Bun.serve   │ │ 队列 + 沙箱   │
+       │               │ │ 钩子 + 路由 │ │ 反代插件    │ │               │
+       └───────────────┘ └──────┬──────┘ └───▲─────────┘ └───────────────┘
+                                │ 私有 HTTP  │
+                                └────────────┘
 ```
 
 | 进程 | 职责 | 关键文件 |
 |------|------|----------|
 | broker | 进程编排、消息路由、崩溃重启、更新检查 | `app.ts`、`lib/ipc/broker.ts` |
 | db | 唯一持有数据库连接（SQLite / MySQL / PG），建表迁移、响应 SQL | `lib/db/db_service.ts` |
-| http | `Bun.serve` + 路由 + EJS + 静态文件 + 插件注入 | `lib/http/http_service.ts` |
-| judge | 评测队列 + v86 沙箱 / 本机后端，回调插件钩子 | `lib/judge/judge_service.ts` |
+| plugin | 唯一加载插件代码的进程，执行钩子，提供插件路由服务器 | `lib/plugin/plugin_service.ts`、`lib/plugin_system.ts` |
+| http | `Bun.serve` + 路由 + EJS + 静态文件 + 插件注入/路由反代 | `lib/http/http_service.ts` |
+| judge | 评测队列 + v86 沙箱 / 本机后端，回调插件判题钩子 | `lib/judge/judge_service.ts` |
 
 - 子进程之间**不直接通信**，全部经 broker 按 `{to}` 字段转发（NDJSON over stdin/stdout，
   见 `lib/ipc/protocol.ts`）；`DWOJ_IPC_TRACE=1` 可以打印每条消息。
@@ -105,7 +110,8 @@ dwoj/
   http/judge 用 `RemoteSqlDriver` 把 SQL 转发出去 —— 业务代码完全不用改。
 - **故障恢复**：任一子进程退出，broker 立即广播 `peer-down`，其它进程里发往它的请求
   立刻失败（HTTP 返回 500、提交判 `System Error`），1s 后按指数退避重启；
-  judge 重启后会自动把 `Pending`/`Running` 的提交重新排队。
+  judge 重启后会自动把 `Pending`/`Running` 的提交重新排队；plugin 重启后会重新从数据库
+  恢复插件状态（插件路由服务器换新端口，http 进程会自动重新获取）。
 - 日志格式统一为 `[等级][模块] 时间 信息`：模块名最长 **6 字符**，后面补空格，
   让所有日志的时间列对齐：
 
@@ -263,9 +269,12 @@ JUDGE_SANDBOX=v86 bun app.ts
 ### 插件管理
 - 入口：登录管理员账号 -> 顶部导航栏"管理面板" -> "插件管理"。
 - 功能：
-  - **上传**: 上传 `.js` 格式的插件文件。
-  - **启用/禁用**: 动态切换插件状态。注意：涉及路由（新页面）的插件启用后建议重启服务器以确保稳定。
+  - **上传**: 上传 `.js` 格式的插件文件（推荐 ES Module 写法）。
+  - **启用/禁用**: 动态切换插件状态并重建插件；插件路由与判题钩子**即时生效**，无需重启。
   - **删除**: 物理删除插件文件。
+- 插件运行在独立的 `plugin` 子进程中，插件路由由 http 进程反向代理对外提供。
+- 插件路由由系统自动鉴权：`/admin/*` 强制管理员（`super_user`），其它路由默认要求登录；
+  插件可用 `app.get(path, { permission: 'super_user' }, handler)` 显式声明，`public` 表示匿名可访问。
 
 ---
 

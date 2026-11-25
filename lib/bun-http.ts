@@ -81,9 +81,34 @@ export interface ExtendedResponse {
 
 interface RouteEntry {
     method: string;
+    /** 注册时的原始路径模板，用于重复注册检查 */
+    path: string;
     regex: RegExp;
     paramNames: string[];
     handlers: RouteHandler[];
+    /** 路由元数据（插件注册时带上归属与权限要求），核心路由没有 */
+    meta?: RouteMeta;
+}
+
+export interface RouteMeta {
+    /** 注册该路由的插件名；核心路由为空 */
+    owner?: string;
+    /** 访问该路由所需权限：角色名或 'public'；未声明时默认已登录 */
+    permission?: string;
+    [key: string]: any;
+}
+
+export interface RouteGuardResult {
+    status: number;
+    message: string;
+}
+
+export type RouteGuard = (meta: RouteMeta | undefined, req: ExtendedRequest) => RouteGuardResult | null;
+
+interface RouteMatch {
+    params: RequestParams;
+    handlers: RouteHandler[];
+    meta?: RouteMeta;
 }
 
 interface MiddlewareEntry {
@@ -102,20 +127,25 @@ export class Router {
     _middleware: RouteHandler[] = [];
     _subRouters: Router[] = [];
 
-    private _addRoute(method: string, pathPattern: string, handlers: RouteHandler[]): void {
+    private _addRoute(method: string, pathPattern: string, handlers: RouteHandler[], meta?: RouteMeta): void {
         const paramNames: string[] = [];
         const regexStr = pathPattern.replace(/:([^/]+)/g, (_: string, name: string) => {
             paramNames.push(name);
             return '([^/]+)';
         });
         const regex = new RegExp(`^${regexStr}$`);
-        this._routes.push({ method: method.toUpperCase(), regex, paramNames, handlers });
+        this._routes.push({ method: method.toUpperCase(), path: pathPattern, regex, paramNames, handlers, meta });
     }
 
     get(path: string, ...handlers: RouteHandler[]): void { this._addRoute('GET', path, handlers); }
     post(path: string, ...handlers: RouteHandler[]): void { this._addRoute('POST', path, handlers); }
     put(path: string, ...handlers: RouteHandler[]): void { this._addRoute('PUT', path, handlers); }
     delete(path: string, ...handlers: RouteHandler[]): void { this._addRoute('DELETE', path, handlers); }
+
+    /** 注册带元数据的路由（插件系统使用） */
+    addRoute(method: string, path: string, handlers: RouteHandler[], meta?: RouteMeta): void {
+        this._addRoute(method, path, handlers, meta);
+    }
 
     use(handler: Router | RouteHandler): void {
         if (handler instanceof Router) {
@@ -125,7 +155,7 @@ export class Router {
         }
     }
 
-    _match(method: string, pathname: string): { params: RequestParams; handlers: RouteHandler[] } | null {
+    _match(method: string, pathname: string): RouteMatch | null {
         for (const route of this._routes) {
             if (route.method !== method) continue;
             const m = pathname.match(route.regex);
@@ -134,7 +164,7 @@ export class Router {
                 route.paramNames.forEach((name, i) => {
                     params[name] = decodeURIComponent(m[i + 1]);
                 });
-                return { params, handlers: route.handlers };
+                return { params, handlers: route.handlers, meta: route.meta };
             }
         }
         return null;
@@ -191,8 +221,27 @@ export class App {
     _pluginManager: any = null;
     _server: any = null;
     _router: Router = new Router();
+    /** 路由守卫：命中路由后、执行处理器前调用（插件系统用它做鉴权） */
+    _routeGuard: RouteGuard | null = null;
+    /** 所有路由都未命中时的兜底处理（插件路由反代使用） */
+    _notFoundHandler: ((req: ExtendedRequest, res: ExtendedResponse) => Promise<void> | void) | null = null;
 
     set(key: string, value: any): void { this._settings[key] = value; }
+
+    /** 设置路由守卫；传 null 关闭 */
+    setRouteGuard(guard: RouteGuard | null): void {
+        this._routeGuard = guard;
+    }
+
+    /** 设置“未命中兜底”处理器；它不能调用 next()，不发送响应时由框架返回 404 */
+    setNotFoundHandler(handler: ((req: ExtendedRequest, res: ExtendedResponse) => Promise<void> | void) | null): void {
+        this._notFoundHandler = handler;
+    }
+
+    /** 注册带元数据的路由（插件系统使用，不经过 app.get 的路由/设置双语义） */
+    defineRoute(method: string, path: string, meta: RouteMeta, ...handlers: RouteHandler[]): void {
+        this._router.addRoute(method, path, handlers, meta);
+    }
 
     /** 设置读取 (1 个参数) 或 HTTP 路由注册 (≥2 个参数) */
     get(key: string, ...handlers: RouteHandler[]): any {
@@ -260,6 +309,14 @@ export class App {
         return this._server;
     }
 
+    /**
+     * 直接用现有 App 处理一个 Request，不经过 Bun.serve。
+     * plugin 进程用它承载插件的内部路由服务器。
+     */
+    handle(request: Request): Promise<Response> {
+        return this._handleRequest(request);
+    }
+
     private async _handleRequest(request: Request): Promise<Response> {
         const url = new URL(request.url);
         const method = request.method.toUpperCase();
@@ -282,6 +339,11 @@ export class App {
                         }
                     }
                 } catch (_) { /* ignore parse errors */ }
+            } else if (contentType.includes('application/json')) {
+                try {
+                    const text = await request.text();
+                    body = text ? JSON.parse(text) : {};
+                } catch (_) { /* ignore parse errors */ }
             }
         }
 
@@ -300,6 +362,18 @@ export class App {
         }
 
         // ---- 构建 req 对象 ----
+        // plugin 进程的内部路由服务器由 http 进程反向代理而来，用户身份放在
+        // 私有请求头里；这份解析只对 plugin 角色生效，公网请求无法伪造。
+        let internalUser: any = null;
+        if (process.env.DWOJ_PROCESS_ROLE === 'plugin') {
+            const encoded = request.headers.get('x-dwoj-user');
+            if (encoded) {
+                try {
+                    internalUser = JSON.parse(Buffer.from(encoded, 'base64').toString('utf-8'));
+                } catch (_) { /* ignore malformed identity */ }
+            }
+        }
+
         const req: ExtendedRequest = {
             method,
             path: pathname,
@@ -309,7 +383,7 @@ export class App {
             cookies,
             headers: request.headers,
             params: {},
-            user: null,
+            user: internalUser,
             app: this,
             file: null,
             _files: files,
@@ -397,10 +471,11 @@ export class App {
         };
 
         // ---- 收集所有中间件和处理函数 ----
+        // 顺序：app.use 注册的中间件/子路由在前，app.get/post/... 的顶层路由在后。
+        // 这样全局中间件（登录态解析）会先执行，核心子路由也优先于插件顶层路由。
         const allMiddleware: MiddlewareEntry[] = [
-            // 通过 app.get/post/put/delete 注册的路由优先匹配
-            { prefix: '/', handler: this._router, isRouter: true },
             ...this._middleware,
+            { prefix: '/', handler: this._router, isRouter: true },
         ];
 
         for (const mw of allMiddleware) {
@@ -413,6 +488,20 @@ export class App {
                 if (relPath !== null) {
                     const match = router._match(method, relPath);
                     if (match) {
+                        // 守卫作为处理链中的一环执行：必须排在全局中间件（登录态解析）之后
+                        if (this._routeGuard) {
+                            const guard = this._routeGuard;
+                            const meta = match.meta;
+                            handlers.push(async (guardedReq, guardedRes, guardedNext) => {
+                                const verdict = guard(meta, guardedReq);
+                                if (verdict) {
+                                    guardedRes._status = verdict.status;
+                                    guardedRes.send(verdict.message);
+                                    return;
+                                }
+                                return guardedNext();
+                            });
+                        }
                         req.params = match.params;
                         handlers.push(...match.handlers);
                         continue;
@@ -433,6 +522,18 @@ export class App {
         const next = async () => {
             if (res._sent) return;
             if (handlerIndex >= handlers.length) {
+                // 先交给未命中兜底（插件路由反代），仍无响应则返回 404
+                if (!res._sent && this._notFoundHandler) {
+                    try {
+                        await this._notFoundHandler(req, res);
+                    } catch (err) {
+                        console.error('Not-found handler error:', err);
+                        if (!res._sent) {
+                            res._status = 500;
+                            res.send('Internal Server Error');
+                        }
+                    }
+                }
                 if (!res._sent) {
                     res._status = 404;
                     res.send('Not Found');
@@ -453,7 +554,6 @@ export class App {
         };
 
         await next();
-
         // ---- 构建最终 Response ----
         if (res._sent && res._redirectUrl) {
             const headers: Record<string, string | string[]> = { Location: res._redirectUrl };

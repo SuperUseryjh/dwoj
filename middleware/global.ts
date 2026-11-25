@@ -29,15 +29,14 @@ export default (pluginManager: any) => {
         const token = req.cookies.token;
         const uid = req.cookies.uid;
 
-        const finalize = () => {
+        const finalize = async () => {
             res.locals.renderMarkdown = (content: string) => {
                 return md.render(content || '');
             };
             try {
-                const injectedHeaders: string[] = pluginManager.emit('injectHeader', req);
-                const injectedFooters: string[] = pluginManager.emit('injectFooter', req);
-                res.locals.pluginHeader = injectedHeaders.join('\n');
-                res.locals.pluginFooter = injectedFooters.join('\n');
+                const injected = await pluginManager.inject(req);
+                res.locals.pluginHeader = injected.header;
+                res.locals.pluginFooter = injected.footer;
             } catch (e) {
                 logger.error('Error injecting plugin headers/footers', e as Error);
                 res.locals.pluginHeader = '';

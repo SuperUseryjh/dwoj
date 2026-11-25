@@ -97,15 +97,16 @@ export default (pluginManager: any): Router => {
         }
     });
 
-    router.get('/admin/plugins', requireRole('super_user'), (req, res, next) => {
-        res.render('admin_plugins', { plugins: pluginManager.getList() });
+    router.get('/admin/plugins', requireRole('super_user'), async (req, res, next) => {
+        const plugins = await pluginManager.getList();
+        res.render('admin_plugins', { plugins });
     });
 
     router.post('/admin/plugins/upload', requireRole('super_user'), upload.single('pluginFile'), async (req, res, next) => {
         if (req.file && req.file.originalname.endsWith('.js')) {
             const targetPath = path.join(config.PLUGINS_DIR, req.file.originalname);
             fs.moveSync(req.file.path, targetPath, { overwrite: true });
-            await pluginManager.loadAll();
+            await pluginManager.reload();
         }
         res.redirect('/admin/plugins');
     });

@@ -102,7 +102,7 @@ function sqliteUrl(): string {
  */
 function usesRemoteDriver(): boolean {
     const role = process.env.DWOJ_PROCESS_ROLE;
-    return role === 'http' || role === 'judge';
+    return role === 'http' || role === 'judge' || role === 'plugin';
 }
 
 function createDriver(): SqlDriver {

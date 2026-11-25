@@ -1,7 +1,7 @@
 import fs from 'fs-extra';
 import * as config from '../../config';
 import { App } from '../bun-http';
-import PluginSystem from '../plugin_system';
+import { RemotePluginHost } from '../plugin/host';
 import globalMiddleware from '../../middleware/global';
 import createRoutes from '../../routes/index';
 import { reportReady, startChild } from '../ipc/node';
@@ -37,15 +37,33 @@ async function main(): Promise<void> {
     app.set('view engine', 'ejs');
     app.use(app.static('public'));
 
-    const database = require('../database');
-    // 插件代码里用 oj.logger 打日志时，模块名统一显示为 plugin
-    const oj = { app, db: database.db, config, logger: createLogger('plugin') };
-    const pluginManager = new PluginSystem(config.PLUGINS_DIR, oj, config.ENABLED_BUILTIN_PLUGINS);
-    await pluginManager.loadAll();
+    const pluginManager = new RemotePluginHost();
     app.set('pluginManager', pluginManager);
 
     app.use(globalMiddleware(pluginManager));
     app.use(createRoutes(pluginManager));
+
+    // 核心路由都没命中时，把请求转发给 plugin 进程里的插件路由服务器。
+    // 必须作为“未命中兜底”而不是普通中间件，否则会排在子路由之前执行。
+    app.setNotFoundHandler(async (req: any, res: any) => {
+        try {
+            const proxied = await pluginManager.proxy(req);
+            if (!proxied) return;
+            res._status = proxied.status;
+            proxied.headers.forEach((value: string, key: string) => {
+                const lower = key.toLowerCase();
+                // Set-Cookie 单独合并；长度/压缩相关头由当前响应重新生成
+                if (lower === 'set-cookie' || lower === 'content-length' || lower === 'content-encoding') return;
+                res._headers[key] = value;
+            });
+            const setCookies = (proxied.headers as any).getSetCookie?.() || [];
+            if (setCookies.length > 0) res._cookies.push(...setCookies);
+            res._body = await proxied.blob();
+            res._sent = true;
+        } catch (err) {
+            logger.error('plugin route proxy failed', err as Error);
+        }
+    });
 
     app.listen(config.PORT, () => {
         logger.info(`DWOJ http worker listening on port ${config.PORT} (pid ${process.pid})`);

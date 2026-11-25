@@ -122,7 +122,7 @@ export async function runJudge(submissionId: number, pluginManager: any): Promis
     await persist(sub);
 
     try {
-        pluginManager?.emit?.('beforeJudge', sub);
+        Object.assign(sub, await pluginManager?.runJudgeHook?.('beforeJudge', sub));
 
         const lang = String(sub.language || '');
         if (!backend.languages.includes(lang)) {
@@ -179,7 +179,7 @@ export async function runJudge(submissionId: number, pluginManager: any): Promis
 
         sub.status = verdict ?? 'Accepted';
 
-        pluginManager?.emit?.('afterJudge', sub);
+        Object.assign(sub, await pluginManager?.runJudgeHook?.('afterJudge', sub));
         await persist(sub);
 
         logger.info(`submission ${sub.id} -> ${sub.status} (${sub.caseResults.length} case(s))`);
