@@ -55,6 +55,7 @@ export interface PluginRouter {
 export interface PluginHooks {
     injectHeader?(req: PluginRequest, ctx: PluginContext): string | void | Promise<string | void>;
     injectFooter?(req: PluginRequest, ctx: PluginContext): string | void | Promise<string | void>;
+    injectStyles?(req: PluginRequest, ctx: PluginContext): string | string[] | void | Promise<string | string[] | void>;
     beforeJudge?(submission: any, ctx: PluginContext): void | Promise<void>;
     afterJudge?(submission: any, ctx: PluginContext): void | Promise<void>;
 }
@@ -62,6 +63,7 @@ export interface PluginHooks {
 export const PLUGIN_HOOK_NAMES = [
     'injectHeader',
     'injectFooter',
+    'injectStyles',
     'beforeJudge',
     'afterJudge',
 ] as const;
@@ -74,6 +76,8 @@ export interface PluginDefinition {
     version?: string;
     description?: string;
     permissions?: PluginPermission[];
+    /** 追加到每个页面 <head> 末尾的 CSS（在核心样式之后，可用于覆盖原版样式） */
+    styles?: string | string[];
     setup?(ctx: PluginContext): void | Promise<void>;
     routes?(router: PluginRouter, ctx: PluginContext): void | Promise<void>;
     hooks?: PluginHooks;

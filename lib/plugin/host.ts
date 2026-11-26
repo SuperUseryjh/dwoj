@@ -19,7 +19,7 @@ const logger = createLogger('plugin');
  * 多进程模式下由 `RemotePluginHost` 通过 broker 把调用转发给 plugin 进程。
  */
 export interface PluginHost {
-    inject(req: PluginRequest): Promise<{ header: string; footer: string }>;
+    inject(req: PluginRequest): Promise<{ header: string; footer: string; styles: string }>;
     runJudgeHook(hook: JudgeHook, submission: any): Promise<any>;
     getList(): Promise<PluginInfo[]>;
     toggle(filename: string, enabled: boolean): Promise<void>;
@@ -37,7 +37,7 @@ export function createPluginHost(manager?: PluginManager): PluginHost {
 export class LocalPluginHost implements PluginHost {
     constructor(private readonly manager: PluginManager) { }
 
-    inject(req: PluginRequest): Promise<{ header: string; footer: string }> {
+    inject(req: PluginRequest): Promise<{ header: string; footer: string; styles: string }> {
         return this.manager.inject(req);
     }
 
@@ -85,14 +85,14 @@ export class RemotePluginHost implements PluginHost {
         return this.endpointPromise;
     }
 
-    async inject(req: PluginRequest): Promise<{ header: string; footer: string }> {
+    async inject(req: PluginRequest): Promise<{ header: string; footer: string; styles: string }> {
         try {
             return await call(
                 'plugin', PLUGIN_RPC.INJECT, { req: snapshotRequest(req) }, PLUGIN_RPC_TIMEOUTS.inject,
             );
         } catch (err) {
             logger.error('plugin inject hook failed', err as Error);
-            return { header: '', footer: '' };
+            return { header: '', footer: '', styles: '' };
         }
     }
 

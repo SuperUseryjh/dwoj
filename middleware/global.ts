@@ -37,10 +37,12 @@ export default (pluginManager: any) => {
                 const injected = await pluginManager.inject(req);
                 res.locals.pluginHeader = injected.header;
                 res.locals.pluginFooter = injected.footer;
+                res.locals.pluginStyles = injected.styles;
             } catch (e) {
                 logger.error('Error injecting plugin headers/footers', e as Error);
                 res.locals.pluginHeader = '';
                 res.locals.pluginFooter = '';
+                res.locals.pluginStyles = '';
             }
             return next();
         };

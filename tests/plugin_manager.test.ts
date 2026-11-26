@@ -121,6 +121,9 @@ export default { name: 'bad-hook', hooks: { onProblemSubmit() {} } };
         writePlugin('bad-field.js', `
 export default { name: 'bad-field', hook: {} };
 `);
+        writePlugin('bad-style.js', `
+export default { name: 'bad-style', styles: 123 };
+`);
 
         const manager = createManager();
         await manager.loadAll();
@@ -129,6 +132,7 @@ export default { name: 'bad-field', hook: {} };
         expect(list.find(item => item.filename === 'bad-perm.js')?.status).toBe('error');
         expect(list.find(item => item.filename === 'bad-hook.js')?.status).toBe('error');
         expect(list.find(item => item.filename === 'bad-field.js')?.error).toContain('未知的插件字段');
+        expect(list.find(item => item.filename === 'bad-style.js')?.error).toContain('styles');
     });
 
     test('加载失败也会创建配置行，管理界面可以切换启用状态', async () => {
@@ -324,6 +328,50 @@ export default {
         const submission = { id: 1, status: 'Pending' };
         const updated = await manager.beforeJudge(submission);
         expect(updated.status).toBe('Touched');
+    });
+
+    test('静态 styles 与 injectStyles 按插件顺序注入', async () => {
+        writePlugin('a-style.js', `
+export default {
+    name: 'a-style',
+    styles: 'body { color: red; }',
+    hooks: {
+        async injectStyles() {
+            await new Promise(resolve => setTimeout(resolve, 5));
+            return ['body { background: black; }', '.from-hook { color: blue; }'];
+        }
+    }
+};
+`);
+        writePlugin('b-style.js', `
+export default {
+    name: 'b-style',
+    styles: ['.from-array { color: green; }']
+};
+`);
+        await seedConfig('a-style.js', { enabled: true });
+        await seedConfig('b-style.js', { enabled: true });
+
+        const manager = createManager();
+        await manager.loadAll();
+
+        const injected = await manager.inject({
+            method: 'GET',
+            path: '/',
+            url: 'http://localhost/',
+            query: {},
+            cookies: {},
+            params: {},
+            headers: new Headers(),
+            user: null,
+        });
+
+        expect(injected.styles).toContain('<style data-plugin="a-style">');
+        expect(injected.styles).toContain('<style data-plugin="b-style">');
+        expect(injected.styles).toContain('body { color: red; }');
+        expect(injected.styles).toContain('body { background: black; }');
+        expect(injected.styles).toContain('.from-array { color: green; }');
+        expect(injected.styles.indexOf('a-style')).toBeLessThan(injected.styles.indexOf('b-style'));
     });
 
     test('数据库权限映射：query/queryOne 需要 db:read，execute 需要 db:write', async () => {

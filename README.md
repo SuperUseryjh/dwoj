@@ -276,6 +276,7 @@ JUDGE_SANDBOX=v86 bun app.ts
   插件可用 `router.get(path, { auth: 'super_user' }, handler)` 显式声明，`public` 表示匿名可访问。
 - 插件 API 已重构：旧的 `manifest` / `onLoad` / `onRoute` / `pluginExports` / CommonJS 写法不再支持，
   迁移见 [插件编写教程](./plugin.md)。
+- 前端自定义：插件可用 `styles` 或 `hooks.injectStyles` 注入 CSS（位于核心样式之后），覆盖原版样式。
 
 ---
 

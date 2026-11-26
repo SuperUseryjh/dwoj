@@ -53,6 +53,21 @@ function errorMessage(err: unknown): string {
     return (err as Error)?.message || String(err);
 }
 
+/** 把 static styles / injectStyles 的返回值统一成 CSS 片段列表 */
+function cssParts(value: unknown): string[] {
+    if (typeof value === 'string') return value.trim() ? [value] : [];
+    if (Array.isArray(value)) {
+        return value.filter((item): item is string => typeof item === 'string' && item.trim() !== '');
+    }
+    return [];
+}
+
+/** 每个插件一个 <style>，方便 DevTools 定位，也便于禁用插件时整体移除 */
+function pluginStyleTag(name: string, css: string): string {
+    const attr = name.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+    return `<style data-plugin="${attr}">\n${css.replace(/<\/style/gi, '<\\/style')}\n</style>`;
+}
+
 /**
  * 插件管理器：唯一加载/调度插件代码的地方。
  *
@@ -294,14 +309,45 @@ export class PluginManager {
         return results;
     }
 
-    async inject(req: PluginRequest): Promise<{ header: string; footer: string }> {
-        const collect = async (name: PluginHookName): Promise<string> => {
-            const results = await this.runHook(name, req);
-            return results
-                .filter((value): value is string => typeof value === 'string' && value.length > 0)
-                .join('\n');
-        };
-        return { header: await collect('injectHeader'), footer: await collect('injectFooter') };
+    async inject(req: PluginRequest): Promise<{ header: string; footer: string; styles: string }> {
+        const headers: string[] = [];
+        const footers: string[] = [];
+        const styles: string[] = [];
+
+        for (const entry of this.entries.values()) {
+            if (entry.info.status !== 'enabled' || !entry.definition || !entry.ctx) continue;
+
+            const definition = entry.definition;
+            const ctx = entry.ctx;
+            const hooks = definition.hooks as Record<string, any> | undefined;
+
+            const runHook = async (name: string): Promise<any> => {
+                const hook = hooks?.[name];
+                if (typeof hook !== 'function') return undefined;
+                try {
+                    return await hook.call(hooks, req, ctx);
+                } catch (err) {
+                    logger.error(`plugin ${definition.name} hook ${name} failed`, err as Error);
+                    return undefined;
+                }
+            };
+
+            const header = await runHook('injectHeader');
+            if (typeof header === 'string' && header.trim()) headers.push(header);
+
+            const footer = await runHook('injectFooter');
+            if (typeof footer === 'string' && footer.trim()) footers.push(footer);
+
+            const css = [
+                ...cssParts(definition.styles),
+                ...cssParts(await runHook('injectStyles')),
+            ];
+            if (css.length > 0) {
+                styles.push(pluginStyleTag(definition.name, css.join('\n')));
+            }
+        }
+
+        return { header: headers.join('\n'), footer: footers.join('\n'), styles: styles.join('\n') };
     }
 
     async beforeJudge(submission: any): Promise<any> {

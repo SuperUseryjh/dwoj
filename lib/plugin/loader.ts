@@ -34,8 +34,7 @@ function normalizePermissions(raw: unknown): PluginPermission[] {
     return out;
 }
 
-function normalizeHooks(raw: unknown): PluginDefinition['hooks'] {
-    if (raw === undefined) return undefined;
+function normalizeHooks(raw: unknown): PluginDefinition['hooks'] {    if (raw === undefined) return undefined;
     if (!isPlainObject(raw)) throw new Error('hooks 必须是对象');
 
     const unknownKeys = Object.keys(raw).filter(key => !(PLUGIN_HOOK_NAMES as readonly string[]).includes(key));
@@ -53,6 +52,16 @@ function normalizeHooks(raw: unknown): PluginDefinition['hooks'] {
     return hooks as PluginDefinition['hooks'];
 }
 
+/** 校验插件静态 CSS：字符串或字符串数组 */
+function normalizeStyles(raw: unknown): string | string[] | undefined {
+    if (raw === undefined) return undefined;
+    if (typeof raw === 'string') return raw;
+    if (Array.isArray(raw) && raw.every(item => typeof item === 'string')) {
+        return [...raw];
+    }
+    throw new Error('styles 必须是字符串或字符串数组');
+}
+
 /**
  * 校验并补全 `export default { ... }` 的定义对象。
  * 所有字段都在这里定型，后续模块不再做兼容判断。
@@ -63,7 +72,7 @@ export function normalizeDefinition(raw: unknown): PluginDefinition {
     }
 
     const allowedKeys = new Set([
-        'name', 'version', 'description', 'permissions', 'setup', 'routes', 'hooks', 'api',
+        'name', 'version', 'description', 'permissions', 'styles', 'setup', 'routes', 'hooks', 'api',
     ]);
     const unknownKeys = Object.keys(raw).filter(key => !allowedKeys.has(key));
     if (unknownKeys.length > 0) {
@@ -94,6 +103,7 @@ export function normalizeDefinition(raw: unknown): PluginDefinition {
         version: raw.version || '1.0.0',
         description: raw.description || '',
         permissions: normalizePermissions(raw.permissions),
+        styles: normalizeStyles(raw.styles),
         setup: raw.setup,
         routes: raw.routes,
         hooks: normalizeHooks(raw.hooks),

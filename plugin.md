@@ -71,6 +71,11 @@ export default {
 
     async setup(ctx) { /* 启动时执行一次 */ },
 
+    styles: `
+        .navbar { background: #1f2937 !important; }
+        body { background: #0f172a; color: #e2e8f0; }
+    `,
+
     routes(router, ctx) {
         router.get('/hello/ping', (req, res) => res.json({ ok: true }));
     },
@@ -88,7 +93,7 @@ export default {
 ```
 
 - 不支持 `.ts`、目录插件、`module.exports`；检测到 CommonJS 会直接报错并提示迁移。
-- 定义对象只允许 `name / version / description / permissions / setup / routes / hooks / api`，拼错或新增未知顶层字段会直接加载失败。
+- 定义对象只允许 `name / version / description / permissions / styles / setup / routes / hooks / api`，拼错或新增未知顶层字段会直接加载失败。
 - 重载使用带时间戳的动态 `import()`，会绕过模块缓存。
 - 插件代码与宿主同权限运行，不是安全沙箱。
 
@@ -102,6 +107,7 @@ export default {
 | `version` | string | 默认 `1.0.0` |
 | `description` | string | 管理界面展示 |
 | `permissions` | `('db:read' \| 'db:write')[]` | 数据库权限；首次加载自动授予 |
+| `styles` | `string \| string[]` | 追加到每个页面 `<head>` 末尾的 CSS，可用于覆盖原版样式 |
 | `setup` | `(ctx) => void \| Promise<void>` | 启用时执行一次；失败则插件进入 `error` |
 | `routes` | `(router, ctx) => void \| Promise<void>` | 注册插件 HTTP 路由 |
 | `hooks` | 对象 | 见第 8 节 |
@@ -227,12 +233,13 @@ export default {
 
 ## 8. 钩子
 
-`hooks` 对象支持四个钩子，全部支持 `async`，系统会按插件加载顺序依次 `await`：
+`hooks` 对象支持以下钩子，全部支持 `async`，系统会按插件加载顺序依次 `await`：
 
 | 钩子 | 签名 | 说明 |
 |------|------|------|
 | `injectHeader` | `(req, ctx) => string \| void` | 每个页面 `<head>` 后注入 HTML |
 | `injectFooter` | `(req, ctx) => string \| void` | 每个页面底部注入 HTML |
+| `injectStyles` | `(req, ctx) => string \| string[] \| void` | 按请求动态注入 CSS，与静态 `styles` 一起输出 |
 | `beforeJudge` | `(submission, ctx) => void` | 评测开始前 |
 | `afterJudge` | `(submission, ctx) => void` | 评测结束、结果落库前 |
 
@@ -241,6 +248,40 @@ export default {
 - `beforeJudge` / `afterJudge` 中可以直接修改 `submission`，修改结果会回传并写入数据库（`afterJudge` 之后落库）。
 - 钩子抛错只记录日志，不影响其它插件或主流程。
 - 没有 `onProblemSubmit` / `onUserRegister` / `onDisable`。
+
+### 8.1 前端 CSS 自定义
+
+插件可以通过两种方式修改原版前端样式：
+
+```javascript
+export default {
+    name: 'dark-theme',
+
+    // 静态样式：每个页面都会注入
+    styles: `
+        body { background: #0f172a; color: #e2e8f0; }
+        .navbar { background: #111827 !important; }
+        pre code { background: #1e293b; color: #e2e8f0; }
+    `,
+
+    hooks: {
+        // 动态样式：按请求返回 CSS，适合按角色/页面切换主题
+        injectStyles(req) {
+            if (req.path.startsWith('/problem/')) {
+                return '.problem-body { font-size: 1.05rem; }';
+            }
+            return '';
+        }
+    }
+};
+```
+
+规则：
+
+- 样式会作为 `<style data-plugin="插件名">...</style>` 插到 `views/partials/header.ejs` 的 `<head>` 末尾，位置在 Bootstrap、KaTeX 与核心内联样式**之后**，因此同优先级下可以覆盖原版样式；
+- 需要覆盖 Bootstrap 中带更高优先级的选择器时，请提高选择器优先级或使用 `!important`；
+- `styles` 与 `injectStyles` 的结果会合并，并按插件加载顺序输出；
+- 与 `injectHeader` 的区别：`injectStyles` 只接受 CSS 文本，输出会被包进 `<style>`，适合主题定制；需要插入 `<link>`、`<script>` 或普通 HTML 时仍使用 `injectHeader`。
 
 ---
 
