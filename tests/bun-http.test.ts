@@ -134,8 +134,8 @@ describe('App', () => {
     });
 
     test('set and get settings', () => {
-        app.set('view engine', 'ejs');
-        expect(app.get('view engine')).toBe('ejs');
+        app.set('custom-setting', 'value');
+        expect(app.get('custom-setting')).toBe('value');
     });
 
     test('set and get arbitrary values', () => {

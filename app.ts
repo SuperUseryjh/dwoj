@@ -113,9 +113,9 @@ async function runBroker(): Promise<void> {
 async function runSingleProcess(): Promise<void> {
     const { App } = await import('./lib/bun-http');
     const { initDb } = await import('./lib/database');
-    const { default: PluginSystem } = await import('./lib/plugin_system');
-    const { LocalPluginHost } = await import('./lib/plugin/host');
-    const { createPluginRouteGuard } = await import('./lib/plugin/route_auth');
+    const { PluginManager } = await import('./lib/plugin/manager');
+    const { createPluginHost } = await import('./lib/plugin/host');
+    const { createPluginRouteGuard } = await import('./lib/plugin/routes');
     const { default: globalMiddleware } = await import('./middleware/global');
     const { default: createRoutes } = await import('./routes/index');
     const { initJudge } = await import('./controllers/judge');
@@ -124,15 +124,14 @@ async function runSingleProcess(): Promise<void> {
     await initDb();
 
     const app = new App();
-    app.set('view engine', 'ejs');
     app.use(app.static('public'));
 
-    const database = require('./lib/database');
-    const oj = { app, db: database.db, config, logger };
-    const pluginSystem = new PluginSystem(config.PLUGINS_DIR, oj, config.ENABLED_BUILTIN_PLUGINS);
-    // 单进程模式不需要 IPC，直接用内存里的插件系统
-    const pluginManager = new LocalPluginHost(pluginSystem);
-    app.set('pluginManager', pluginManager);
+    const manager = new PluginManager(config.PLUGINS_DIR, {
+        app,
+        builtinEnabled: config.ENABLED_BUILTIN_PLUGINS,
+    });
+    // 单进程模式不需要 IPC，直接用内存里的插件管理器
+    const pluginManager = createPluginHost(manager);
 
     // 主应用同时承载核心路由与插件路由：守卫只作用于带插件元数据的路由，
     // 核心路由（如 /admin/*）继续走它们自己的 requireRole。
@@ -141,8 +140,8 @@ async function runSingleProcess(): Promise<void> {
     app.use(globalMiddleware(pluginManager));
     app.use(createRoutes(pluginManager));
 
-    // 核心路由先注册，确保插件无法用同名路径覆盖核心页面
-    await pluginSystem.loadAll();
+    // 核心路由先注册，插件路由由 manager 挂在稳定的 hostRouter 上（排在核心之后）
+    await manager.loadAll();
 
     if (!confirmUnisolatedJudge()) {
         logger.error('启动已取消：评测机未启用隔离沙箱，且未完成风险确认。');

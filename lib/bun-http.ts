@@ -94,7 +94,7 @@ export interface RouteMeta {
     /** 注册该路由的插件名；核心路由为空 */
     owner?: string;
     /** 访问该路由所需权限：角色名或 'public'；未声明时默认已登录 */
-    permission?: string;
+    auth?: string;
     [key: string]: any;
 }
 
@@ -104,6 +104,13 @@ export interface RouteGuardResult {
 }
 
 export type RouteGuard = (meta: RouteMeta | undefined, req: ExtendedRequest) => RouteGuardResult | null;
+
+/** 只读路由描述，供插件归属校验等外部模块使用 */
+export interface RouteDescriptor {
+    method: string;
+    path: string;
+    meta?: RouteMeta;
+}
 
 interface RouteMatch {
     params: RequestParams;
@@ -145,6 +152,28 @@ export class Router {
     /** 注册带元数据的路由（插件系统使用） */
     addRoute(method: string, path: string, handlers: RouteHandler[], meta?: RouteMeta): void {
         this._addRoute(method, path, handlers, meta);
+    }
+
+    /** 清空当前 Router 的所有路由/中间件/子路由（插件热重载使用） */
+    reset(): void {
+        this._routes = [];
+        this._middleware = [];
+        this._subRouters = [];
+    }
+
+    /** 只读枚举路由；默认包含子 Router */
+    listRoutes(recursive = true): RouteDescriptor[] {
+        const routes: RouteDescriptor[] = this._routes.map(route => ({
+            method: route.method,
+            path: route.path,
+            meta: route.meta,
+        }));
+        if (recursive) {
+            for (const sub of this._subRouters) {
+                routes.push(...sub.listRoutes(true));
+            }
+        }
+        return routes;
     }
 
     use(handler: Router | RouteHandler): void {
@@ -217,8 +246,6 @@ export class App {
     _middleware: MiddlewareEntry[] = [];
     _settings: Record<string, any> = {};
     _viewsDir: string = path.join(process.cwd(), 'views');
-    _viewCache: Record<string, ejs.TemplateFunction> = {};
-    _pluginManager: any = null;
     _server: any = null;
     _router: Router = new Router();
     /** 路由守卫：命中路由后、执行处理器前调用（插件系统用它做鉴权） */
@@ -238,9 +265,15 @@ export class App {
         this._notFoundHandler = handler;
     }
 
-    /** 注册带元数据的路由（插件系统使用，不经过 app.get 的路由/设置双语义） */
-    defineRoute(method: string, path: string, meta: RouteMeta, ...handlers: RouteHandler[]): void {
-        this._router.addRoute(method, path, handlers, meta);
+    /** 只读枚举本应用（含挂载的 Router 与子 Router）注册的所有路由 */
+    listRoutes(): RouteDescriptor[] {
+        const routes: RouteDescriptor[] = [...this._router.listRoutes(true)];
+        for (const entry of this._middleware) {
+            if (entry.isRouter && entry.handler instanceof Router) {
+                routes.push(...entry.handler.listRoutes(true));
+            }
+        }
+        return routes;
     }
 
     /** 设置读取 (1 个参数) 或 HTTP 路由注册 (≥2 个参数) */

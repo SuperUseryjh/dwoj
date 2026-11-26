@@ -28,7 +28,7 @@ interface Child {
 
 const ENTRY_FILES: Record<Exclude<Role, 'broker'>, string[]> = {
     db: ['..', 'db', 'db_service'],
-    plugin: ['..', 'plugin', 'plugin_service'],
+    plugin: ['..', 'plugin', 'service'],
     http: ['..', 'http', 'http_service'],
     judge: ['..', 'judge', 'judge_service'],
 };

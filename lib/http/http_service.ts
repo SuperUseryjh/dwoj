@@ -1,7 +1,7 @@
 import fs from 'fs-extra';
 import * as config from '../../config';
 import { App } from '../bun-http';
-import { RemotePluginHost } from '../plugin/host';
+import { createPluginHost } from '../plugin/host';
 import globalMiddleware from '../../middleware/global';
 import createRoutes from '../../routes/index';
 import { reportReady, startChild } from '../ipc/node';
@@ -34,11 +34,9 @@ async function main(): Promise<void> {
     fs.ensureDirSync(config.UPLOAD_DIR);
     fs.ensureDirSync(config.PLUGINS_DIR);
 
-    app.set('view engine', 'ejs');
     app.use(app.static('public'));
 
-    const pluginManager = new RemotePluginHost();
-    app.set('pluginManager', pluginManager);
+    const pluginManager = createPluginHost();
 
     app.use(globalMiddleware(pluginManager));
     app.use(createRoutes(pluginManager));

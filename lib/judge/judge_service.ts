@@ -5,7 +5,7 @@ const logger = createLogger('judge');
 // judge 进程本身就是「评测进程」，沙箱直接跑在这里，
 // 不需要再套一层 RemoteBackend 工作进程。
 if (process.env.JUDGE_WORKER === undefined) process.env.JUDGE_WORKER = '0';
-import { RemotePluginHost } from '../plugin/host';
+import { createPluginHost } from '../plugin/host';
 import { createLogger } from '../logger';
 import { reportReady, startChild } from '../ipc/node';
 import { getBackend } from './backend';
@@ -46,7 +46,7 @@ async function main(): Promise<void> {
     });
 
     // 插件只在 plugin 进程里加载，这里只保留一个 IPC 客户端
-    const pluginManager = new RemotePluginHost();
+    const pluginManager = createPluginHost();
     await initJudge(pluginManager);
 
     reportReady({

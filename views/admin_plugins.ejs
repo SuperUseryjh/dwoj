@@ -36,11 +36,21 @@
                                 <span class="badge bg-info">内置</span>
                             <% } %>
                         </td>
-                        <td><strong><%= p.name %></strong> <span class="badge bg-secondary"><%= p.version %></span></td>
-                        <td><%= p.desc %></td>
                         <td>
-                            <% if(p.enabled) { %>
+                            <strong><%= p.name %></strong>
+                            <% if(p.version) { %><span class="badge bg-secondary"><%= p.version %></span><% } %>
+                        </td>
+                        <td>
+                            <%= p.description %>
+                            <% if(p.error) { %>
+                                <div class="text-danger small"><%= p.error %></div>
+                            <% } %>
+                        </td>
+                        <td>
+                            <% if(p.status === 'enabled') { %>
                                 <span class="badge bg-success">运行中</span>
+                            <% } else if(p.status === 'error') { %>
+                                <span class="badge bg-danger">错误</span>
                             <% } else { %>
                                 <span class="badge bg-secondary">已禁用</span>
                             <% } %>
@@ -49,7 +59,7 @@
                            <div class="d-flex gap-2">
                                <form action="/admin/plugins/toggle" method="POST">
                                    <input type="hidden" name="filename" value="<%= p.filename %>">
-                                   <% if(p.enabled) { %>
+                                   <% if(p.status === 'enabled') { %>
                                        <input type="hidden" name="enabled" value="false">
                                        <button class="btn btn-sm btn-warning">禁用</button>
                                    <% } else { %>

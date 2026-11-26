@@ -31,13 +31,12 @@ dwoj/
 ├── lib/
 │   ├── ipc/            (进程编排 broker + 子进程 IPC 节点)
 │   ├── db/             (数据库驱动: Bun.SQL / 远程 IPC 驱动 / db 进程)
-│   ├── plugin/         (plugin 进程入口 + http/judge 侧的插件宿主客户端)
+│   ├── plugin/         (plugin 进程、插件管理器、加载器、权限、路由与宿主客户端)
 │   ├── http/           (HTTP 进程入口)
 │   ├── judge/          (评测后端: v86 沙箱 / 本机进程 / 队列)
 │   ├── bun-http.ts     (HTTP 服务器框架)
 │   ├── database.ts     (数据库操作入口，按进程角色选本地/远程驱动)
 │   ├── logger.ts       (日志模块，多进程共用同一个日志文件)
-│   ├── plugin_system.ts (插件系统)
 │   └── updater.ts      (自动更新)
 ├── middleware/
 │   ├── auth.ts         (认证中间件)
@@ -100,7 +99,7 @@ dwoj/
 |------|------|----------|
 | broker | 进程编排、消息路由、崩溃重启、更新检查 | `app.ts`、`lib/ipc/broker.ts` |
 | db | 唯一持有数据库连接（SQLite / MySQL / PG），建表迁移、响应 SQL | `lib/db/db_service.ts` |
-| plugin | 唯一加载插件代码的进程，执行钩子，提供插件路由服务器 | `lib/plugin/plugin_service.ts`、`lib/plugin_system.ts` |
+| plugin | 唯一加载插件代码的进程，执行钩子，提供插件路由服务器 | `lib/plugin/service.ts`、`lib/plugin/manager.ts` |
 | http | `Bun.serve` + 路由 + EJS + 静态文件 + 插件注入/路由反代 | `lib/http/http_service.ts` |
 | judge | 评测队列 + v86 沙箱 / 本机后端，回调插件判题钩子 | `lib/judge/judge_service.ts` |
 
@@ -269,12 +268,14 @@ JUDGE_SANDBOX=v86 bun app.ts
 ### 插件管理
 - 入口：登录管理员账号 -> 顶部导航栏"管理面板" -> "插件管理"。
 - 功能：
-  - **上传**: 上传 `.js` 格式的插件文件（推荐 ES Module 写法）。
+  - **上传**: 上传 `.js` 插件（仅支持 ES Module 的 `export default { ... }`）。
   - **启用/禁用**: 动态切换插件状态并重建插件；插件路由与判题钩子**即时生效**，无需重启。
   - **删除**: 物理删除插件文件。
 - 插件运行在独立的 `plugin` 子进程中，插件路由由 http 进程反向代理对外提供。
 - 插件路由由系统自动鉴权：`/admin/*` 强制管理员（`super_user`），其它路由默认要求登录；
-  插件可用 `app.get(path, { permission: 'super_user' }, handler)` 显式声明，`public` 表示匿名可访问。
+  插件可用 `router.get(path, { auth: 'super_user' }, handler)` 显式声明，`public` 表示匿名可访问。
+- 插件 API 已重构：旧的 `manifest` / `onLoad` / `onRoute` / `pluginExports` / CommonJS 写法不再支持，
+  迁移见 [插件编写教程](./plugin.md)。
 
 ---
 

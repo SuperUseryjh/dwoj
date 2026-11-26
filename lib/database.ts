@@ -67,13 +67,6 @@ export interface Role {
     name: string;
 }
 
-export interface PluginConfig {
-    filename: string;
-    enabled: number;
-    token: string;
-    permissions: string | null;
-}
-
 // ============================================================
 // 驱动实例
 // ============================================================

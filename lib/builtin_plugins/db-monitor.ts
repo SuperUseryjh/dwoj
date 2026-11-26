@@ -1,7 +1,6 @@
 import { createLogger } from '../logger';
-
-
 import { wrapDbFunction } from '../database';
+import type { PluginDefinition } from '../plugin/types';
 
 const logger = createLogger('dbmon');
 
@@ -56,42 +55,30 @@ function wrapDatabase(): void {
     logger.info('Database functions wrapped for performance monitoring');
 }
 
-function resetStats(): void {
-    for (const key of Object.keys(stats)) {
-        stats[key] = { count: 0, totalTime: 0, slowQueries: [] };
-    }
-}
-
-export const manifest = {
+const dbMonitor: PluginDefinition = {
     name: 'db-monitor',
     description: 'Database read/write performance monitor',
     version: '1.0.0',
-    permissions: ['read_db'],
-    builtin: true,
+    permissions: [],
+
+    setup() {
+        wrapDatabase();
+    },
+
+    routes(router) {
+        router.get('/admin/db-monitor', (_req, res) => {
+            const summary: Record<string, any> = {};
+            for (const [key, s] of Object.entries(stats)) {
+                summary[key] = {
+                    count: s.count,
+                    totalTime: Math.round(s.totalTime * 100) / 100,
+                    avgTime: s.count > 0 ? Math.round((s.totalTime / s.count) * 100) / 100 : 0,
+                    slowQueries: s.slowQueries.slice(-10),
+                };
+            }
+            res.json(summary);
+        });
+    },
 };
 
-export function onLoad(): void {
-    wrapDatabase();
-}
-
-export function onRoute(_oj: any, _db: any, _getPluginExports: any, app: any): void {
-    app.get('/admin/db-monitor', (_req: any, res: any) => {
-        const summary: Record<string, any> = {};
-        for (const [key, s] of Object.entries(stats)) {
-            summary[key] = {
-                count: s.count,
-                totalTime: Math.round(s.totalTime * 100) / 100,
-                avgTime: s.count > 0 ? Math.round((s.totalTime / s.count) * 100) / 100 : 0,
-                slowQueries: s.slowQueries.slice(-10),
-            };
-        }
-        res.json(summary);
-    });
-}
-
-export function onDisable(): void {
-    resetStats();
-    logger.info('Performance monitoring stopped');
-}
-
-export { stats };
+export default dbMonitor;
