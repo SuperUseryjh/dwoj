@@ -8,10 +8,10 @@ import { createLogger } from '../lib/logger';
 
 const logger = createLogger('http');
 
-const router = new Router();
-const upload = new UploadHandler({ dest: config.UPLOAD_DIR });
-
 export default (pluginManager: any): Router => {
+    const router = new Router();
+    const upload = new UploadHandler({ dest: config.UPLOAD_DIR });
+
     router.get('/admin', requireRole('super_user'), async (req, res, next) => {
         try {
             const users = await query<any>("SELECT id, username, role, isBanned, tags FROM users");
@@ -113,13 +113,21 @@ export default (pluginManager: any): Router => {
 
     router.post('/admin/plugins/toggle', requireRole('super_user'), async (req, res, next) => {
         const { filename, enabled } = req.body;
-        await pluginManager.toggle(filename, enabled === 'true');
-        res.redirect('/admin/plugins');
+        try {
+            await pluginManager.toggle(filename, enabled === 'true');
+            res.redirect('/admin/plugins');
+        } catch (err) {
+            res.status(400).send((err as Error).message);
+        }
     });
 
     router.post('/admin/plugins/delete', requireRole('super_user'), async (req, res, next) => {
-        await pluginManager.delete(req.body.filename);
-        res.redirect('/admin/plugins');
+        try {
+            await pluginManager.delete(req.body.filename);
+            res.redirect('/admin/plugins');
+        } catch (err) {
+            res.status(400).send((err as Error).message);
+        }
     });
 
     return router;

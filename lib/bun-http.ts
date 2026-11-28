@@ -176,6 +176,17 @@ export class Router {
         return routes;
     }
 
+    /** 给当前 Router（含子 Router）的所有路由补充元数据，已有字段优先保留 */
+    applyMeta(meta: RouteMeta, recursive = true): this {
+        for (const route of this._routes) {
+            route.meta = { ...meta, ...(route.meta || {}) };
+        }
+        if (recursive) {
+            for (const sub of this._subRouters) sub.applyMeta(meta, true);
+        }
+        return this;
+    }
+
     use(handler: Router | RouteHandler): void {
         if (handler instanceof Router) {
             this._subRouters.push(handler);

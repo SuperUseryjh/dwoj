@@ -1,7 +1,7 @@
 import { describe, expect, test, beforeEach, beforeAll, afterAll } from 'bun:test';
 import fs from 'fs';
 import path from 'path';
-import { App } from '../lib/bun-http';
+import { App, Router } from '../lib/bun-http';
 import { PluginManager } from '../lib/plugin/manager';
 import { createPluginDb } from '../lib/plugin/permissions';
 import { createPluginRouteGuard } from '../lib/plugin/routes';
@@ -257,6 +257,37 @@ export default { name: 'toggler' };
         expect(manager.getList().find(item => item.filename === 'builtin:builtin-x')?.status).toBe('enabled');
         await manager.delete('builtin:builtin-x');
         expect(manager.getList().find(item => item.filename === 'builtin:builtin-x')).toBeDefined();
+    });
+
+    test('系统插件默认启用、不可禁用，并可挂载系统路由', async () => {
+        const app = new App();
+        const manager = new PluginManager(TEST_PLUGIN_DIR, {
+            app,
+            builtinPlugins: [{
+                name: 'system-test',
+                version: '1.0.0',
+                system: true,
+                setup(ctx) {
+                    const router = new Router();
+                    router.get('/system/test', (_req, res) => res.send('system-ok'));
+                    ctx.system!.mount(router);
+                },
+            }],
+            builtinEnabled: [],
+        });
+        await manager.loadAll();
+
+        const info = manager.getList().find(item => item.filename === 'builtin:system-test');
+        expect(info?.status).toBe('enabled');
+        expect(info?.system).toBe(true);
+
+        await expect(manager.toggle('builtin:system-test', false)).rejects.toThrow(/不可禁用/);
+        await expect(manager.delete('builtin:system-test')).rejects.toThrow(/不可删除/);
+
+        const route = app.listRoutes().find(item => item.path === '/system/test');
+        expect(route?.meta?.auth).toBe('public');
+        const response = await app.handle(new Request('http://localhost/system/test'));
+        expect(await response.text()).toBe('system-ok');
     });
 
     test('旧权限名自动映射并写回', async () => {

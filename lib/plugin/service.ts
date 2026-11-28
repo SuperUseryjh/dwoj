@@ -7,6 +7,7 @@ import { reportReady, startChild } from '../ipc/node';
 import { PluginManager } from './manager';
 import { createPluginRouteGuard } from './routes';
 import { PLUGIN_RPC, hydrateRequest, type JudgeHook } from './protocol';
+import createPluginRuntime from '../../middleware/plugin_runtime';
 
 const logger = createLogger('plugin');
 
@@ -34,6 +35,7 @@ async function build(): Promise<void> {
     app.setRouteGuard(createPluginRouteGuard({ enforceAll: true }));
 
     const manager = new PluginManager(config.PLUGINS_DIR, { app, builtinEnabled });
+    app.use(createPluginRuntime(manager));
     await manager.loadAll();
 
     current = { manager, app };

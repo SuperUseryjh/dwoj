@@ -3,7 +3,6 @@ import * as config from '../../config';
 import { App } from '../bun-http';
 import { createPluginHost } from '../plugin/host';
 import globalMiddleware from '../../middleware/global';
-import createRoutes from '../../routes/index';
 import { reportReady, startChild } from '../ipc/node';
 import { createLogger } from '../logger';
 
@@ -38,8 +37,8 @@ async function main(): Promise<void> {
 
     const pluginManager = createPluginHost();
 
-    app.use(globalMiddleware(pluginManager));
-    app.use(createRoutes(pluginManager));
+    // http 进程只负责会话解析与静态资源；所有页面/接口都由 plugin 进程承载
+    app.use(globalMiddleware());
 
     // 核心路由都没命中时，把请求转发给 plugin 进程里的插件路由服务器。
     // 必须作为“未命中兜底”而不是普通中间件，否则会排在子路由之前执行。

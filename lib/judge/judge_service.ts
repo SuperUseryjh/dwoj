@@ -9,6 +9,7 @@ import { createPluginHost } from '../plugin/host';
 import { createLogger } from '../logger';
 import { reportReady, startChild } from '../ipc/node';
 import { getBackend } from './backend';
+import { loadJudgeBackendPlugins } from '../builtin_plugins/judge_backends';
 import { enqueueJudge, getSupportedLanguages, initJudge, isJudging } from '../../controllers/judge';
 
 /**
@@ -20,6 +21,9 @@ import { enqueueJudge, getSupportedLanguages, initJudge, isJudging } from '../..
  */
 
 async function main(): Promise<void> {
+    // 系统服务插件：注册评测执行后端
+    loadJudgeBackendPlugins();
+
     startChild({
         handler: async (method: string, params: any) => {
             switch (method) {

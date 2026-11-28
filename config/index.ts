@@ -108,6 +108,6 @@ export const V86_BOOT_TIMEOUT_MS: number = Math.max(60000, parseInt(process.env.
 /** 单次执行额外的固定开销预算（解释器在模拟器里启动比真机慢） */
 export const V86_RUN_GRACE_MS: number = Math.max(3000, parseInt(process.env.V86_RUN_GRACE_MS || '15000', 10) || 15000);
 
-/** 内置插件列表，用逗号分隔。设为空字符串可禁用所有内置插件。 */
-export const ENABLED_BUILTIN_PLUGINS: string[] = (process.env.ENABLED_BUILTIN_PLUGINS || 'db-monitor')
+/** 可选普通内置插件列表，用逗号分隔；系统插件（system: true）始终启用，不受此变量影响。 */
+export const ENABLED_BUILTIN_PLUGINS: string[] = (process.env.ENABLED_BUILTIN_PLUGINS || '')
     .split(',').map(s => s.trim()).filter(Boolean);

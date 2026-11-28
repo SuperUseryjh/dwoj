@@ -23,7 +23,7 @@ function verifyToken(token: string): Promise<any> {
     });
 }
 
-export default (pluginManager: any) => {
+export default (pluginManager?: any) => {
     return async (req: any, res: any, next: () => Promise<void>) => {
         res.locals.ROLE_LV = ROLE_LV;
         const token = req.cookies.token;
@@ -33,16 +33,18 @@ export default (pluginManager: any) => {
             res.locals.renderMarkdown = (content: string) => {
                 return md.render(content || '');
             };
-            try {
-                const injected = await pluginManager.inject(req);
-                res.locals.pluginHeader = injected.header;
-                res.locals.pluginFooter = injected.footer;
-                res.locals.pluginStyles = injected.styles;
-            } catch (e) {
-                logger.error('Error injecting plugin headers/footers', e as Error);
-                res.locals.pluginHeader = '';
-                res.locals.pluginFooter = '';
-                res.locals.pluginStyles = '';
+            if (pluginManager) {
+                try {
+                    const injected = await pluginManager.inject(req);
+                    res.locals.pluginHeader = injected.header;
+                    res.locals.pluginFooter = injected.footer;
+                    res.locals.pluginStyles = injected.styles;
+                } catch (e) {
+                    logger.error('Error injecting plugin headers/footers', e as Error);
+                    res.locals.pluginHeader = '';
+                    res.locals.pluginFooter = '';
+                    res.locals.pluginStyles = '';
+                }
             }
             return next();
         };

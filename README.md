@@ -88,8 +88,8 @@ dwoj/
                │ NDJSON       │ NDJSON       │ NDJSON       │ NDJSON
        ┌───────▼───────┐ ┌────▼────────┐ ┌───▼─────────┐ ┌──▼────────────┐
        │      db       │ │   plugin    │ │    http     │ │     judge     │
-       │ 唯一持有数据库│ │ 加载插件    │ │ Bun.serve   │ │ 队列 + 沙箱   │
-       │               │ │ 钩子 + 路由 │ │ 反代插件    │ │               │
+       │ 唯一持有数据库│ │ 系统+用户   │ │ 会话 + 静态 │ │ 队列 + 沙箱   │
+       │               │ │ 插件与路由  │ │ 全部反代    │ │ 后端插件      │
        └───────────────┘ └──────┬──────┘ └───▲─────────┘ └───────────────┘
                                 │ 私有 HTTP  │
                                 └────────────┘
@@ -97,11 +97,11 @@ dwoj/
 
 | 进程 | 职责 | 关键文件 |
 |------|------|----------|
-| broker | 进程编排、消息路由、崩溃重启、更新检查 | `app.ts`、`lib/ipc/broker.ts` |
+| broker | 进程编排、消息路由、崩溃重启 | `app.ts`、`lib/ipc/broker.ts` |
 | db | 唯一持有数据库连接（SQLite / MySQL / PG），建表迁移、响应 SQL | `lib/db/db_service.ts` |
-| plugin | 唯一加载插件代码的进程，执行钩子，提供插件路由服务器 | `lib/plugin/service.ts`、`lib/plugin/manager.ts` |
-| http | `Bun.serve` + 路由 + EJS + 静态文件 + 插件注入/路由反代 | `lib/http/http_service.ts` |
-| judge | 评测队列 + v86 沙箱 / 本机后端，回调插件判题钩子 | `lib/judge/judge_service.ts` |
+| plugin | 唯一加载插件代码的进程；系统插件承载全部页面/接口与后台服务 | `lib/plugin/service.ts`、`lib/plugin/manager.ts`、`lib/builtin_plugins/` |
+| http | 会话解析 + 静态文件 + 反代全部请求到 plugin 进程 | `lib/http/http_service.ts` |
+| judge | 评测队列 + v86 沙箱 / 本机后端，后端由服务插件注册 | `lib/judge/judge_service.ts` |
 
 - 子进程之间**不直接通信**，全部经 broker 按 `{to}` 字段转发（NDJSON over stdin/stdout，
   见 `lib/ipc/protocol.ts`）；`DWOJ_IPC_TRACE=1` 可以打印每条消息。
@@ -157,7 +157,7 @@ bun test tests/database.test.ts
 | `V86_COMPILE_TIMEOUT_MS` | 沙箱内 C++ 编译超时 | `180000` |
 | `COMPILE_TIMEOUT_MS` | 本机后端 C++ 编译超时 | `20000` |
 | `JUDGE_WORKER` | 单进程模式下是否把执行后端再拆一个子进程（`0` 关闭，调试/测试用） | `1` |
-| `ENABLED_BUILTIN_PLUGINS` | 启用的内置插件（逗号分隔） | `db-monitor` |
+| `ENABLED_BUILTIN_PLUGINS` | 可选普通内置插件（逗号分隔）；系统插件始终启用 | 空 |
 | `JUDGE_SANDBOX_ACK` | 设为 `1` 跳过无隔离后端的启动风险确认（仅限非交互部署） | 空 |
 | `DWOJ_SINGLE_PROCESS` | 设为 `1` 时所有服务跑在一个进程里（调试 / 无 IPC 环境） | 空 |
 | `DWOJ_IPC_TRACE` | 设为 `1` 时打印每条进程间消息 | 空 |
@@ -271,7 +271,8 @@ JUDGE_SANDBOX=v86 bun app.ts
   - **上传**: 上传 `.js` 插件（仅支持 ES Module 的 `export default { ... }`）。
   - **启用/禁用**: 动态切换插件状态并重建插件；插件路由与判题钩子**即时生效**，无需重启。
   - **删除**: 物理删除插件文件。
-- 插件运行在独立的 `plugin` 子进程中，插件路由由 http 进程反向代理对外提供。
+- 插件运行在独立的 `plugin` 子进程中，系统插件承载全部页面与接口，http 进程只做会话/静态/反代。
+- 系统插件（首页、auth、profile、problem、discuss、admin、updater、db-monitor）默认启用且不可禁用，管理页显示“系统”徽章。
 - 插件路由由系统自动鉴权：`/admin/*` 强制管理员（`super_user`），其它路由默认要求登录；
   插件可用 `router.get(path, { auth: 'super_user' }, handler)` 显式声明，`public` 表示匿名可访问。
 - 插件 API 已重构：旧的 `manifest` / `onLoad` / `onRoute` / `pluginExports` / CommonJS 写法不再支持，

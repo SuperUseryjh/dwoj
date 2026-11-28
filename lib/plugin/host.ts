@@ -145,7 +145,13 @@ export class RemotePluginHost implements PluginHost {
         });
         headers.set('x-dwoj-internal-token', endpoint.token);
         if (req.user) {
-            const identity = { id: req.user.id, username: req.user.username, role: req.user.role };
+            const identity = {
+                id: req.user.id,
+                username: req.user.username,
+                role: req.user.role,
+                bio: req.user.bio ?? null,
+                tags: Array.isArray(req.user.tags) ? req.user.tags : [],
+            };
             headers.set('x-dwoj-user', Buffer.from(JSON.stringify(identity)).toString('base64'));
         }
 
@@ -180,6 +186,7 @@ export class RemotePluginHost implements PluginHost {
 
         const search = new URL(req.url, 'http://localhost').search;
         const target = `http://127.0.0.1:${endpoint.port}${req.path}${search}`;
-        return await fetch(target, { method: req.method, headers, body });
+        // 必须手动处理重定向：否则 fetch 会自己跟随并把 3xx 的 Set-Cookie 丢掉
+        return await fetch(target, { method: req.method, headers, body, redirect: 'manual' });
     }
 }

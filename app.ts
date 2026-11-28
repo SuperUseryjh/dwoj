@@ -1,11 +1,9 @@
 import fs from 'fs-extra';
-import path from 'path';
 import * as config from './config';
 import { createLogger, newLogFileName } from './lib/logger';
 import { printBanner } from './lib/banner';
 import { confirmUnisolatedJudge } from './lib/judge/risk_ack';
 import { Broker } from './lib/ipc/broker';
-import Updater from './lib/updater';
 
 const logger = createLogger('broker');
 
@@ -30,7 +28,6 @@ process.on('unhandledRejection', (reason: any) => {
  * 设置 `DWOJ_SINGLE_PROCESS=1` 可以退回单进程模式（调试/无 IPC 环境）。
  */
 
-const appRoot = path.resolve(__dirname);
 const singleProcess = ['1', 'true', 'yes'].includes(
     String(process.env.DWOJ_SINGLE_PROCESS || '').toLowerCase(),
 );
@@ -97,13 +94,6 @@ async function runBroker(): Promise<void> {
     });
     logger.info(`DWOJ ${config.CURRENT_VERSION} running in multi-process mode on port ${config.PORT} ` +
         `(broker pid ${process.pid}, backend=${judgeInfo.backend ?? 'unknown'}, log ${process.env.DWOJ_LOG_FILE})`);
-
-    // 检查并应用更新（管理员功能；更新后需要重启才会生效）
-    const updater = new Updater(appRoot);
-    const updated = await updater.checkAndApplyUpdate();
-    if (updated) {
-        logger.info('Application updated. Please restart the server to load the new version.');
-    }
 }
 
 // ============================================================
@@ -117,8 +107,8 @@ async function runSingleProcess(): Promise<void> {
     const { createPluginHost } = await import('./lib/plugin/host');
     const { createPluginRouteGuard } = await import('./lib/plugin/routes');
     const { default: globalMiddleware } = await import('./middleware/global');
-    const { default: createRoutes } = await import('./routes/index');
     const { initJudge } = await import('./controllers/judge');
+    const { loadJudgeBackendPlugins } = await import('./lib/builtin_plugins/judge_backends');
 
     ensureDirs();
     await initDb();
@@ -138,7 +128,6 @@ async function runSingleProcess(): Promise<void> {
     app.setRouteGuard(createPluginRouteGuard({ enforceAll: false }));
 
     app.use(globalMiddleware(pluginManager));
-    app.use(createRoutes(pluginManager));
 
     // 核心路由先注册，插件路由由 manager 挂在稳定的 hostRouter 上（排在核心之后）
     await manager.loadAll();
@@ -148,6 +137,7 @@ async function runSingleProcess(): Promise<void> {
         process.exit(1);
     }
 
+    loadJudgeBackendPlugins();
     await initJudge(pluginManager);
 
     app.listen(config.PORT, async () => {
@@ -163,11 +153,6 @@ async function runSingleProcess(): Promise<void> {
             logFile: process.env.DWOJ_LOG_FILE,
         });
         logger.info(`DWOJ ${config.CURRENT_VERSION} running on port ${config.PORT} (single-process mode)`);
-        const updater = new Updater(appRoot);
-        const updated = await updater.checkAndApplyUpdate();
-        if (updated) {
-            logger.info('Application updated. Please restart the server to load the new version.');
-        }
     });
 }
 

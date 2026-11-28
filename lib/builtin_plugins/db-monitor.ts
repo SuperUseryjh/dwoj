@@ -60,6 +60,7 @@ const dbMonitor: PluginDefinition = {
     description: 'Database read/write performance monitor',
     version: '1.0.0',
     permissions: [],
+    system: true,
 
     setup() {
         wrapDatabase();

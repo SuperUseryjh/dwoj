@@ -85,6 +85,7 @@ export class PluginManager {
     private readonly pluginDir: string;
     private readonly builtinPlugins: PluginDefinition[];
     private readonly builtinEnabled: Set<string>;
+    private readonly systemRouter = new Router();
     private readonly hostRouter = new Router();
     private readonly routeRegistry: RouteRegistry;
     private readonly entries = new Map<string, PluginEntry>();
@@ -105,11 +106,14 @@ export class PluginManager {
         fs.ensureDirSync(this.pluginDir);
 
         this.hostRouter.reset();
+        this.systemRouter.reset();
         this.routeRegistry.reset();
         this.entries.clear();
         this.apiByName.clear();
 
         if (!this.mounted) {
+            // 系统路由必须先于普通插件路由，普通插件无法覆盖核心页面
+            this.app.use(this.systemRouter);
             this.app.use(this.hostRouter);
             this.mounted = true;
         }
@@ -138,6 +142,7 @@ export class PluginManager {
                         token,
                         permissions: [],
                         builtin: false,
+                        system: false,
                     },
                 });
             }
@@ -207,12 +212,13 @@ export class PluginManager {
 
     private async addEntry(filename: string, definition: PluginDefinition, builtin: boolean): Promise<void> {
         const requested = definition.permissions || [];
+        const isSystem = builtin && definition.system === true;
         let enabled: boolean;
         let token: string;
         let permissions: PluginPermission[];
 
         if (builtin) {
-            enabled = this.builtinEnabled.has(definition.name);
+            enabled = isSystem || this.builtinEnabled.has(definition.name);
             token = `builtin:${definition.name}`;
             permissions = [...new Set(requested)];
         } else {
@@ -249,6 +255,14 @@ export class PluginManager {
             config,
             db: createPluginDb(databaseDb, new Set(permissions)),
             plugins: { get: (name: string) => this.apiByName.get(name) },
+            system: isSystem ? {
+                app: this.app,
+                manager: this,
+                mount: (router: Router) => {
+                    router.applyMeta({ owner: `system:${definition.name}`, auth: 'public', system: true });
+                    this.systemRouter.use(router);
+                },
+            } : undefined,
         };
 
         this.entries.set(filename, {
@@ -261,6 +275,7 @@ export class PluginManager {
                 token,
                 permissions,
                 builtin,
+                system: isSystem,
             },
             definition,
             ctx,
@@ -361,6 +376,11 @@ export class PluginManager {
     }
 
     async toggle(filename: string, enabled: boolean, options: { reload?: boolean } = {}): Promise<void> {
+        const entry = this.entries.get(filename);
+        if (entry?.info.system) {
+            throw new Error(`系统插件 ${entry.info.name} 不可禁用`);
+        }
+
         if (filename.startsWith('builtin:')) {
             const name = filename.slice('builtin:'.length);
             if (enabled) this.builtinEnabled.add(name);
@@ -376,6 +396,11 @@ export class PluginManager {
     }
 
     async delete(filename: string, options: { reload?: boolean } = {}): Promise<void> {
+        const entry = this.entries.get(filename);
+        if (entry?.info.system) {
+            throw new Error(`系统插件 ${entry.info.name} 不可删除`);
+        }
+
         if (filename.startsWith('builtin:')) {
             logger.warn(`Cannot delete builtin plugin: ${filename}`);
             return;

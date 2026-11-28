@@ -1,5 +1,6 @@
 import * as config from '../../config';
 import { createLogger } from '../logger';
+import { createJudgeBackend } from './backend_registry';
 
 const logger = createLogger('judge');
 
@@ -137,12 +138,18 @@ export function getBackend(): ExecutionBackend {
     if (useWorker) {
         const { RemoteBackend } = require('./remote_backend');
         backend = new RemoteBackend(mode);
-    } else if (mode === 'v86') {
-        const { V86Backend } = require('./v86_backend');
-        backend = new V86Backend();
     } else {
-        const { ProcessBackend } = require('./process_backend');
-        backend = new ProcessBackend();
+        // 优先使用 judge 进程加载的后端插件；未加载时退回内置实现，保证测试/独立调用可用
+        backend = createJudgeBackend(mode);
+        if (!backend) {
+            if (mode === 'v86') {
+                const { V86Backend } = require('./v86_backend');
+                backend = new V86Backend();
+            } else {
+                const { ProcessBackend } = require('./process_backend');
+                backend = new ProcessBackend();
+            }
+        }
     }
     return backend!;
 }
